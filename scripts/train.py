@@ -300,11 +300,16 @@ class ModelParams:
         "7×7 final classification kernel"
         "4 features in layer 1, 36 features in layer 2"
     """
-    n_classes: int = 1           # Number of output classes
+    n_classes: int = 2           # Number of output classes (2 for EBSSA binary)
     conv1_channels: int = 4      # Conv1 output channels
     conv2_channels: int = 36     # Conv2 output channels
     kernel_sizes: Tuple[int, int, int] = (5, 5, 7)  # Kernel sizes for each layer
-    pool_size: int = 2           # Pooling kernel size
+    
+    # Pooling configuration
+    pool1_kernel: int = 2        # Pool1 kernel size
+    pool1_stride: int = 2        # Pool1 stride
+    pool2_kernel: int = 2        # Pool2 kernel size
+    pool2_stride: int = 2        # Pool2 stride
     
     # Layer-wise leak (IGARSS 2023: "90% and 10% of threshold")
     thresholds: Tuple[float, float, float] = (10.0, 10.0, 10.0)
