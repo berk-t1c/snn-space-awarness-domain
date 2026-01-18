@@ -225,7 +225,7 @@ class ModelParams:
     pool2_kernel: int = 2
     pool2_stride: int = 2
     thresholds: tuple = (10.0, 10.0, 10.0)  # Adaptive via PENT
-    leaks: tuple = (9.0, 6.0, 0.0)
+    leaks: tuple = (9.0, 1.0, 0.0)  # 90%, 10%, 0% of threshold
     use_dog_filters: bool = True
     
     def __post_init__(self):

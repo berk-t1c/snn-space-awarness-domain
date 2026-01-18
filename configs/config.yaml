@@ -134,7 +134,7 @@ model:
   # Adaptive thresholds via homeostasis (PENT) - see homeostasis section
   # Initial thresholds (will be adapted during training)
   thresholds: [10.0, 10.0, 10.0]  # Starting thresholds (adaptive via PENT)
-  leaks: [9.0, 6.0, 0.0]          # Leak values: 90%, 10%, 0% of threshold
+  leaks: [9.0, 1.0, 0.0]          # Leak values: 90%, 10%, 0% of threshold
 
   # Initialization
   use_dog_filters: true     # Use Difference-of-Gaussians for Conv1
