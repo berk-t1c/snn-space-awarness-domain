@@ -39,22 +39,23 @@ gradient_checkpointing: false  # Not used for STDP
 # -----------------------------------------------------------------------------
 # STDP Learning Parameters
 # -----------------------------------------------------------------------------
-# Paper (IGARSS 2023): α⁺ = 0.04, α⁻ = 0.03
-# Paper (Kheradpisheh 2018): α⁺ = 0.004, α⁻ = 0.003
+# IGARSS 2023 (Kirkland et al.): α⁺ = 0.04, α⁻ = 0.03 (10x higher for faster convergence)
+# Note: Kheradpisheh 2018 uses 0.004/0.003 - use those for exact paper replication
 stdp:
-  lr_plus: 0.04           # LTP learning rate (potentiation)
-  lr_minus: 0.03          # LTD learning rate (depression)
+  lr_plus: 0.04           # LTP learning rate (potentiation) - IGARSS 2023
+  lr_minus: 0.03          # LTD learning rate (depression) - IGARSS 2023
   weight_min: 0.0         # Minimum weight value
   weight_max: 1.0         # Maximum weight value
   weight_init_mean: 0.8   # Weight initialization mean
-  weight_init_std: 0.05   # Weight initialization std (Kheradpisheh 2018: 0.05)
+  weight_init_std: 0.01   # Weight initialization std (IGARSS 2023: 0.01)
   use_soft_bounds: true   # Use multiplicative STDP: Δw = α·w·(1-w)
 
 # -----------------------------------------------------------------------------
 # Winner-Take-All (WTA) Parameters
 # -----------------------------------------------------------------------------
+# Paper uses BOTH global (intra-map) AND local (inter-map) competition
 wta:
-  mode: "global"          # "global", "local", or "both"
+  mode: "both"            # "global", "local", or "both" - paper uses both
   local_radius: 2         # Radius for local inhibition
   enable_homeostasis: true
   target_rate: 0.1        # Target firing rate for homeostasis
@@ -63,18 +64,18 @@ wta:
   threshold_max: 100.0    # Maximum adaptive threshold
 
 # -----------------------------------------------------------------------------
-# Adaptive Thresholds (Homeostasis)
+# Adaptive Thresholds (Homeostasis / PENT)
 # -----------------------------------------------------------------------------
-# Paper (Lee 2018): "In the event of a post-neuronal spike, we uniformly 
-# increase the firing threshold of all the post-units constituting the 
-# feature map."
+# IGARSS 2023 uses ADAPTIVE thresholds (PENT mechanism)
+# "In the event of a post-neuronal spike, we uniformly increase the firing
+# threshold of all the post-units constituting the feature map."
 homeostasis:
-  enabled: true
+  enabled: true           # CRITICAL: Must be true for IGARSS 2023 / EBSSA
   theta_rest: 10.0        # Resting threshold (initial value)
   theta_plus: 0.05        # Threshold increase per spike
   tau_theta: 10000.0      # Decay time constant (higher = slower decay)
   theta_max: 50.0         # Maximum threshold cap
-  
+
   # Dead neuron recovery
   dead_neuron_recovery: true
   dead_threshold: 0.01    # Firing rate below this = dead neuron
@@ -115,20 +116,26 @@ data:
 # -----------------------------------------------------------------------------
 # Model Architecture
 # -----------------------------------------------------------------------------
-# Paper (IGARSS 2023): "4 features in layer 1, 36 features in layer 2"
-# Paper: "5×5 convolution kernel" for Conv1/Conv2, "7×7 final classification"
+# IGARSS 2023 / EBSSA: 4 features in layer 1, 36 features in layer 2
+# Kernel sizes: 5×5 for Conv1/Conv2, 7×7 for Conv3
 model:
-  n_classes: 1              # Number of output classes (1 for binary segmentation)
+  n_classes: 2              # Number of output classes (2 for EBSSA binary segmentation)
   conv1_channels: 4         # Conv1 output channels
   conv2_channels: 36        # Conv2 output channels
   kernel_sizes: [5, 5, 7]   # Kernel sizes for Conv1, Conv2, Conv3
-  pool_size: 2              # Pooling kernel size
-  
-  # Layer-wise thresholds and leak (Kheradpisheh 2018, IGARSS 2023)
-  # Thresholds: Conv1=10, Conv2=60, Conv3=2 (task-specific per Kheradpisheh 2018)
-  thresholds: [10.0, 60.0, 2.0]   # Spike thresholds per layer
+
+  # Pooling configuration (IGARSS 2023: standard 2×2 pooling)
+  # Note: Kheradpisheh 2018 uses 7×7 stride 6 for Pool1
+  pool1_kernel: 2
+  pool1_stride: 2
+  pool2_kernel: 2
+  pool2_stride: 2
+
+  # Adaptive thresholds via homeostasis (PENT) - see homeostasis section
+  # Initial thresholds (will be adapted during training)
+  thresholds: [10.0, 10.0, 10.0]  # Starting thresholds (adaptive via PENT)
   leaks: [9.0, 6.0, 0.0]          # Leak values: 90%, 10%, 0% of threshold
-  
+
   # Initialization
   use_dog_filters: true     # Use Difference-of-Gaussians for Conv1
 

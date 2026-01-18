@@ -251,20 +251,27 @@ class EncoderConfig:
     conv3: LayerConfig = field(default_factory=lambda: LayerConfig(
         out_channels=1, kernel_size=7, threshold=10.0, leak=0.0  # No leak
     ))
-    pool_kernel_size: int = 2
-    pool_stride: Optional[int] = None
+    # Pool1: 7×7 kernel, stride 6 (Kheradpisheh 2018 Table 1)
+    pool1_kernel_size: int = 7
+    pool1_stride: int = 6
+    # Pool2: 2×2 kernel, stride 2 (Kheradpisheh 2018 Table 1)
+    pool2_kernel_size: int = 2
+    pool2_stride: int = 2
+    # Legacy: for backward compatibility
+    pool_kernel_size: int = 2  # Deprecated, use pool1/pool2 instead
+    pool_stride: Optional[int] = None  # Deprecated
     use_wta: bool = True
-    wta_mode: str = "global"
+    wta_mode: str = "both"  # Paper uses both global + local
     store_all_spikes: bool = True
     store_membranes: bool = False
-    
+
     def __post_init__(self) -> None:
         """Validate configuration."""
         _validate_positive_int(self.input_channels, "input_channels")
-        _validate_positive_int(self.pool_kernel_size, "pool_kernel_size")
-        
-        if self.pool_stride is not None:
-            _validate_positive_int(self.pool_stride, "pool_stride")
+        _validate_positive_int(self.pool1_kernel_size, "pool1_kernel_size")
+        _validate_positive_int(self.pool1_stride, "pool1_stride")
+        _validate_positive_int(self.pool2_kernel_size, "pool2_kernel_size")
+        _validate_positive_int(self.pool2_stride, "pool2_stride")
         
         if self.wta_mode not in ("global", "local", "both"):
             raise EncoderConfigError(
@@ -320,9 +327,13 @@ class EncoderConfig:
                     leak=0.0,  # No leak
                     leak_mode="subtractive"
                 ),
-                pool_kernel_size=2,
+                # Kheradpisheh 2018 pooling configuration
+                pool1_kernel_size=7,
+                pool1_stride=6,
+                pool2_kernel_size=2,
+                pool2_stride=2,
                 use_wta=True,
-                wta_mode="global"
+                wta_mode="both"  # Paper uses both global + local
             ),
             "spikeseg": cls(
                 input_channels=1,
@@ -347,9 +358,13 @@ class EncoderConfig:
                     leak=0.0,
                     leak_mode="subtractive"
                 ),
-                pool_kernel_size=2,
+                # Kheradpisheh 2018 pooling configuration
+                pool1_kernel_size=7,
+                pool1_stride=6,
+                pool2_kernel_size=2,
+                pool2_stride=2,
                 use_wta=True,
-                wta_mode="global"
+                wta_mode="both"  # Paper uses both global + local
             ),
             "default": cls().with_n_classes(n_classes)  # Uses default values with n_classes
         }
@@ -622,14 +637,13 @@ class SpikeSEGEncoder(nn.Module):
             leak_mode=config.conv1.leak_mode
         )
         
-        # Pool1: 2x2 max pooling with indices
-        pool_stride = config.pool_stride or config.pool_kernel_size
+        # Pool1: 7×7 max pooling, stride 6 (Kheradpisheh 2018 Table 1)
         self.pool1 = nn.MaxPool2d(
-            kernel_size=config.pool_kernel_size,
-            stride=pool_stride,
+            kernel_size=config.pool1_kernel_size,
+            stride=config.pool1_stride,
             return_indices=True
         )
-        
+
         # Conv2: 4 → 36 features
         self.conv2 = SpikingEncoderLayer(
             in_channels=config.conv1.out_channels,
@@ -639,11 +653,11 @@ class SpikeSEGEncoder(nn.Module):
             leak=config.conv2.leak,
             leak_mode=config.conv2.leak_mode
         )
-        
-        # Pool2: 2x2 max pooling with indices
+
+        # Pool2: 2×2 max pooling, stride 2 (Kheradpisheh 2018 Table 1)
         self.pool2 = nn.MaxPool2d(
-            kernel_size=config.pool_kernel_size,
-            stride=pool_stride,
+            kernel_size=config.pool2_kernel_size,
+            stride=config.pool2_stride,
             return_indices=True
         )
         

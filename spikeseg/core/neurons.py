@@ -43,7 +43,7 @@ Example:
 
 from __future__ import annotations
 
-from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -165,23 +165,28 @@ class BaseNeuron(nn.Module):
             )
     
     def forward(
-        self, 
-        input_current: torch.Tensor, 
-        membrane: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        input_current: torch.Tensor,
+        membrane: torch.Tensor,
+        has_fired: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Process one timestep.
-        
+
         Args:
             input_current: Incoming current (weighted sum of input spikes).
                           Shape: (batch, channels, height, width) or (batch, features)
             membrane: Current membrane potential (same shape as input_current).
-        
+            has_fired: Optional mask of neurons that have already fired.
+                      If provided, these neurons are prevented from firing again.
+                      (Kheradpisheh 2018: "neurons are not allowed to fire more than once")
+
         Returns:
-            Tuple of (spikes, new_membrane):
+            Tuple of (spikes, new_membrane, pre_reset_membrane):
                 - spikes: Binary tensor indicating which neurons fired
                 - new_membrane: Updated membrane potential after reset
-        
+                - pre_reset_membrane: Membrane before reset (for WTA tie-breaking)
+
         Raises:
             NotImplementedError: Subclasses must implement this method.
         """
@@ -263,40 +268,55 @@ class IFNeuron(BaseNeuron):
         super().__init__(threshold=threshold)
     
     def forward(
-        self, 
-        input_current: torch.Tensor, 
-        membrane: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        input_current: torch.Tensor,
+        membrane: torch.Tensor,
+        has_fired: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Process one timestep of IF neuron dynamics.
-        
+
         Args:
             input_current: Incoming current. Shape: (batch, channels, ...)
             membrane: Current membrane potential. Same shape as input_current.
-        
+            has_fired: Optional mask of neurons that have already fired.
+                      If provided, these neurons are prevented from firing again.
+                      (Kheradpisheh 2018: "neurons are not allowed to fire more than once")
+
         Returns:
-            Tuple of (spikes, new_membrane).
-        
+            Tuple of (spikes, new_membrane, pre_reset_membrane):
+                - spikes: Binary tensor indicating which neurons fired
+                - new_membrane: Membrane after reset
+                - pre_reset_membrane: Membrane before reset (for WTA tie-breaking)
+
         Raises:
             ValueError: If input shapes or devices don't match.
         """
         # Validate inputs
         self._validate_inputs(input_current, membrane)
-        
+
         # Step 1: Integrate (accumulate input)
         membrane = membrane + input_current
-        
+
+        # Store pre-reset membrane for WTA tie-breaking (Kheradpisheh 2018)
+        pre_reset_membrane = membrane.clone()
+
         # Step 2: Check threshold and generate spikes
         spikes = spike_function(membrane, self.threshold.item())
-        
+
+        # Step 2b: Fire-once constraint (Kheradpisheh 2018)
+        # "neurons are not allowed to fire more than once"
+        if has_fired is not None:
+            spikes = spikes * (1.0 - has_fired)  # Mask out already-fired neurons
+
         # Step 3: Reset neurons that fired
         # Where spikes=1, set membrane to 0
         # Where spikes=0, keep membrane as is
         # This is done with: membrane * (1 - spikes)
         membrane = membrane * (1.0 - spikes)
-        
-        return spikes, membrane
-    
+
+        return spikes, membrane, pre_reset_membrane
+
     def __repr__(self) -> str:
         """String representation for debugging."""
         return f"IFNeuron(threshold={self.threshold.item():.2f})"
@@ -419,26 +439,33 @@ class LIFNeuron(BaseNeuron):
             self.register_buffer("leak", torch.tensor(0.0))  # Not used, but for consistency
     
     def forward(
-        self, 
-        input_current: torch.Tensor, 
-        membrane: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        input_current: torch.Tensor,
+        membrane: torch.Tensor,
+        has_fired: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Process one timestep of LIF neuron dynamics.
-        
+
         Args:
             input_current: Incoming current. Shape: (batch, channels, ...)
             membrane: Current membrane potential. Same shape as input_current.
-        
+            has_fired: Optional mask of neurons that have already fired.
+                      If provided, these neurons are prevented from firing again.
+                      (Kheradpisheh 2018: "neurons are not allowed to fire more than once")
+
         Returns:
-            Tuple of (spikes, new_membrane).
-        
+            Tuple of (spikes, new_membrane, pre_reset_membrane):
+                - spikes: Binary tensor indicating which neurons fired
+                - new_membrane: Membrane after reset
+                - pre_reset_membrane: Membrane before reset (for WTA tie-breaking)
+
         Raises:
             ValueError: If input shapes or devices don't match.
         """
         # Validate inputs
         self._validate_inputs(input_current, membrane)
-        
+
         # Step 1: Apply leak and integrate input
         if self.leak_mode == "subtractive":
             # V(t) = V(t-1) + I(t) - λ
@@ -446,19 +473,27 @@ class LIFNeuron(BaseNeuron):
         else:  # multiplicative
             # V(t) = β * V(t-1) + I(t)
             membrane = self.beta * membrane + input_current
-        
+
         # Step 2: Clamp to non-negative
         # Biological neurons can't have negative potential (relative to resting)
         # This also prevents numerical instability
         membrane = torch.clamp(membrane, min=0.0)
-        
+
+        # Store pre-reset membrane for WTA tie-breaking (Kheradpisheh 2018)
+        pre_reset_membrane = membrane.clone()
+
         # Step 3: Check threshold and generate spikes
         spikes = spike_function(membrane, self.threshold.item())
-        
+
+        # Step 3b: Fire-once constraint (Kheradpisheh 2018)
+        # "neurons are not allowed to fire more than once"
+        if has_fired is not None:
+            spikes = spikes * (1.0 - has_fired)  # Mask out already-fired neurons
+
         # Step 4: Reset neurons that fired
         membrane = membrane * (1.0 - spikes)
-        
-        return spikes, membrane
+
+        return spikes, membrane, pre_reset_membrane
     
     def __repr__(self) -> str:
         """String representation for debugging."""
