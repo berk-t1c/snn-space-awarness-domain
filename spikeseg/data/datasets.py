@@ -1112,6 +1112,16 @@ class EBSSADataset(EventDataset):
                 label = load_labels_mat(rec['label_path'])
             except Exception as e:
                 warnings.warn(f"Failed to load labels for {rec['name']}: {e}")
+
+        # EBSSA: Labels may be embedded in the event file (Obj field)
+        if label is None and self.use_labels:
+            try:
+                import scipy.io as sio
+                mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                if 'Obj' in mat:
+                    label = {'Obj': mat['Obj']}
+            except Exception:
+                pass
         
         # For segmentation, create binary mask
         # (placeholder - actual format depends on label file structure)
@@ -1197,21 +1207,72 @@ class EBSSADataset(EventDataset):
         )
     
     def _labels_to_mask(
-        self, 
-        labels: Dict[str, Any], 
+        self,
+        labels: Dict[str, Any],
         events: EventData
     ) -> torch.Tensor:
-        """Convert label dict to segmentation mask."""
+        """Convert label dict to segmentation mask.
+
+        Handles EBSSA format with object trajectories:
+        - Obj.x, Obj.y: Object center coordinates over time
+        - Obj.ts: Timestamps for each position
+        """
         mask = torch.zeros(self.height, self.width, dtype=torch.long)
-        
-        # Try to find bounding box or mask in labels
-        if 'bbox' in labels:
+
+        # Scale factors from sensor resolution to output size
+        scale_x = self.width / events.width
+        scale_y = self.height / events.height
+
+        # EBSSA format: Obj contains object trajectories
+        if 'Obj' in labels:
+            obj = labels['Obj']
+            # Handle numpy structured array
+            if hasattr(obj, 'dtype') and obj.dtype.names:
+                obj_x = obj['x'].flatten() if 'x' in obj.dtype.names else None
+                obj_y = obj['y'].flatten() if 'y' in obj.dtype.names else None
+                obj_ts = obj['ts'].flatten() if 'ts' in obj.dtype.names else None
+            elif isinstance(obj, tuple):
+                # Tuple format: (x, y, id, ts, nObj)
+                obj_x, obj_y = obj[0], obj[1]
+                obj_ts = obj[3] if len(obj) > 3 else None
+            else:
+                obj_x, obj_y, obj_ts = None, None, None
+
+            if obj_x is not None and obj_y is not None and len(obj_x) > 0:
+                # Get event time range
+                if len(events.t) > 0:
+                    t_min, t_max = events.t.min(), events.t.max()
+                else:
+                    t_min, t_max = 0, float('inf')
+
+                # Find object positions within event time window
+                if obj_ts is not None and len(obj_ts) > 0:
+                    # Filter to positions within time window
+                    time_mask = (obj_ts >= t_min) & (obj_ts <= t_max)
+                    pos_x = obj_x[time_mask] if time_mask.any() else obj_x
+                    pos_y = obj_y[time_mask] if time_mask.any() else obj_y
+                else:
+                    pos_x, pos_y = obj_x, obj_y
+
+                # Create mask around object positions (use mean position for static mask)
+                if len(pos_x) > 0:
+                    # Use all positions or subsample for efficiency
+                    radius = 3  # Mask radius in output pixels
+                    for i in range(0, len(pos_x), max(1, len(pos_x) // 100)):
+                        x = int(pos_x[i] * scale_x)
+                        y = int(pos_y[i] * scale_y)
+                        # Create circular mask around object
+                        y1 = max(0, y - radius)
+                        y2 = min(self.height, y + radius + 1)
+                        x1 = max(0, x - radius)
+                        x2 = min(self.width, x + radius + 1)
+                        mask[y1:y2, x1:x2] = 1
+
+        # Fallback: Try bounding box format
+        elif 'bbox' in labels:
             bbox = labels['bbox']
-            if bbox.ndim == 1 and len(bbox) >= 4:
+            if hasattr(bbox, 'ndim') and bbox.ndim == 1 and len(bbox) >= 4:
                 x1, y1, x2, y2 = bbox[:4].astype(int)
-                # Scale to output size
-                scale_x = self.width / events.width
-                scale_y = self.height / events.height
                 x1 = int(x1 * scale_x)
                 x2 = int(x2 * scale_x)
                 y1 = int(y1 * scale_y)
@@ -1220,14 +1281,13 @@ class EBSSADataset(EventDataset):
         elif 'mask' in labels:
             mask_arr = labels['mask']
             mask = torch.from_numpy(mask_arr).long()
-            # Resize if needed
             if mask.shape != (self.height, self.width):
                 mask = torch.nn.functional.interpolate(
                     mask.unsqueeze(0).unsqueeze(0).float(),
                     size=(self.height, self.width),
                     mode='nearest'
                 ).squeeze().long()
-        
+
         return mask
     
     def get_recording_info(self, index: int) -> Dict[str, Any]:
