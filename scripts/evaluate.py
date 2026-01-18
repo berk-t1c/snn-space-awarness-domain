@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 
 from spikeseg.data.datasets import EBSSADataset
-from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig
+from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig, LayerConfig
 
 
 logging.basicConfig(
@@ -144,40 +144,23 @@ def load_model(checkpoint_path: Path, device: torch.device) -> SpikeSEGEncoder:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     # Extract config from checkpoint or use defaults
-    if 'config' in checkpoint:
-        # Reconstruct config
-        cfg = checkpoint['config']
-        enc_config = EncoderConfig(
-            in_channels=cfg.get('in_channels', 2),
-            n_classes=cfg.get('n_classes', 2),
-            conv1_channels=cfg.get('conv1_channels', 4),
-            conv2_channels=cfg.get('conv2_channels', 36),
-            conv1_kernel_size=cfg.get('kernel_sizes', [5, 5, 7])[0],
-            conv2_kernel_size=cfg.get('kernel_sizes', [5, 5, 7])[1],
-            conv3_kernel_size=cfg.get('kernel_sizes', [5, 5, 7])[2],
-            thresholds=cfg.get('thresholds', [0.1, 0.1, 0.1]),
-            leaks=cfg.get('leaks', [0.09, 0.01, 0.0]),
-        )
-    else:
-        # Use IGARSS 2023 defaults
-        enc_config = EncoderConfig(
-            in_channels=2,
-            n_classes=2,
-            conv1_channels=4,
-            conv2_channels=36,
-            conv1_kernel_size=5,
-            conv2_kernel_size=5,
-            conv3_kernel_size=7,
-            thresholds=[0.1, 0.1, 0.1],
-            leaks=[0.09, 0.01, 0.0],
-        )
+    # Use IGARSS 2023 defaults with proper LayerConfig structure
+    thresholds = [0.1, 0.1, 0.1]
+    leaks = [0.09, 0.01, 0.0]
+
+    enc_config = EncoderConfig(
+        input_channels=2,
+        conv1=LayerConfig(out_channels=4, kernel_size=5, threshold=thresholds[0], leak=leaks[0]),
+        conv2=LayerConfig(out_channels=36, kernel_size=5, threshold=thresholds[1], leak=leaks[1]),
+        conv3=LayerConfig(out_channels=2, kernel_size=7, threshold=thresholds[2], leak=leaks[2]),
+    )
 
     model = SpikeSEGEncoder(enc_config)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     model.eval()
 
-    logger.info(f"Model loaded: {enc_config.conv1_channels}→{enc_config.conv2_channels}→{enc_config.n_classes} features")
+    logger.info(f"Model loaded: {enc_config.conv1.out_channels}→{enc_config.conv2.out_channels}→{enc_config.conv3.out_channels} features")
 
     return model
 
