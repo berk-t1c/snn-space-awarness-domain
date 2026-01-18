@@ -435,6 +435,8 @@ class TrainingConfig:
             data['stdp'] = STDPParams(**data['stdp'])
         if 'wta' in data and isinstance(data['wta'], dict):
             data['wta'] = WTAParams(**data['wta'])
+        if 'homeostasis' in data and isinstance(data['homeostasis'], dict):
+            data['homeostasis'] = HomeostasisParams(**data['homeostasis'])
         if 'convergence' in data and isinstance(data['convergence'], dict):
             data['convergence'] = ConvergenceParams(**data['convergence'])
         if 'data' in data and isinstance(data['data'], dict):
