@@ -1725,8 +1725,13 @@ class STDPTrainer:
         
         # Reset threshold manager for this layer
         if layer_name in self.threshold_managers:
-            self.threshold_managers[layer_name].reset()
-            self.logger.info(f"Reset adaptive thresholds for {layer_name}")
+            thresh_mgr = self.threshold_managers[layer_name]
+            thresh_mgr.reset()
+            self.logger.info(
+                f"Reset adaptive thresholds for {layer_name}: "
+                f"θ_rest={thresh_mgr.theta_rest}, θ_plus={thresh_mgr.theta_plus}, "
+                f"θ_max={thresh_mgr.theta_max}, actual_mean={thresh_mgr.thresholds.mean().item():.2f}"
+            )
         
         best_convergence = 0.0
         patience_counter = 0
