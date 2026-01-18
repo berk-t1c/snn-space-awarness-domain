@@ -204,12 +204,24 @@ def evaluate(
 
     logger.info(f"Evaluating on {len(dataloader)} batches...")
 
+    total_spikes = 0
+    total_label_positives = 0
+
     for batch_idx, (x, labels) in enumerate(dataloader):
         # Move labels to device
         labels = labels.to(device)
 
         # Get predictions
         predictions = predict_sample(model, x, device)
+
+        # Debug: count spikes and positive labels
+        total_spikes += (predictions == 1).sum().item()
+        total_label_positives += (labels == 1).sum().item()
+
+        # Debug output for first few samples
+        if batch_idx < 3:
+            logger.info(f"  Sample {batch_idx}: pred_sum={predictions.sum().item()}, label_sum={labels.sum().item()}, "
+                       f"pred_shape={predictions.shape}, label_shape={labels.shape}")
 
         # Resize predictions to match label size if needed
         if predictions.shape[-2:] != labels.shape[-2:]:
@@ -230,6 +242,9 @@ def evaluate(
 
         if (batch_idx + 1) % 100 == 0:
             logger.info(f"  [{batch_idx + 1}/{len(dataloader)}] samples processed")
+
+    logger.info(f"  Total predicted positives: {total_spikes}")
+    logger.info(f"  Total label positives: {total_label_positives}")
 
     # Final aggregated metrics
     eps = 1e-7
