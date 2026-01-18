@@ -1,0 +1,210 @@
+# =============================================================================
+# pyproject.toml - SpikeSEG: Spiking Neural Network for Space Domain Awareness
+# =============================================================================
+# Based on:
+# - Kheradpisheh et al. 2018 - STDP-based spiking deep CNN
+# - Kirkland et al. 2020 - SpikeSEG: Spiking Segmentation via STDP
+# - Kirkland et al. 2022 - Unsupervised Spiking Instance Segmentation (HULK-SMASH)
+# - Kirkland et al. 2023 - Neuromorphic Space Domain Awareness (IGARSS)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Build System
+# -----------------------------------------------------------------------------
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# -----------------------------------------------------------------------------
+# Project Metadata
+# -----------------------------------------------------------------------------
+
+[project]
+name = "spikeseg"
+version = "0.1.0"
+description = "Spiking Neural Network for Event-Based Space Domain Awareness and Satellite Segmentation"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Berk Yilmaz"}
+]
+keywords = [
+    "spiking-neural-networks",
+    "neuromorphic",
+    "event-camera",
+    "space-domain-awareness",
+    "satellite-detection",
+    "stdp",
+    "instance-segmentation",
+    "event-based-vision",
+    "ebssa",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+
+# Core dependencies - pinned with upper bounds for production stability
+dependencies = [
+    "torch>=2.0.0,<3.0.0",
+    "numpy>=1.24.0,<2.0.0",
+    "scipy>=1.10.0,<2.0.0",
+    "h5py>=3.8.0,<4.0.0",
+    "pyyaml>=6.0,<7.0",
+    "tqdm>=4.65.0",
+    "matplotlib>=3.7.0,<4.0.0",
+    "scikit-learn>=1.2.0,<2.0.0",
+    "opencv-python>=4.7.0,<5.0.0",
+]
+
+# Optional extras
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+vis = [
+    "tensorboard>=2.12.0",
+    "plotly>=5.14.0",
+    "seaborn>=0.12.0",
+]
+all = [
+    "spikeseg[dev,vis]",
+]
+
+[project.urls]
+Repository = "https://github.com/berk-t1c/snn-space-awareness-domain"
+Documentation = "https://github.com/berk-t1c/snn-space-awareness-domain#readme"
+Issues = "https://github.com/berk-t1c/snn-space-awareness-domain/issues"
+
+# -----------------------------------------------------------------------------
+# Package Discovery
+# -----------------------------------------------------------------------------
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["spikeseg*"]
+exclude = ["tests*", "notebooks*", "scripts*"]
+
+[tool.setuptools.package-data]
+spikeseg = ["py.typed"]
+
+# -----------------------------------------------------------------------------
+# Black: Code Formatter
+# -----------------------------------------------------------------------------
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | venv
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+# -----------------------------------------------------------------------------
+# Ruff: Fast Linter
+# -----------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "W",      # pycodestyle warnings
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (black handles this)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spikeseg"]
+
+# -----------------------------------------------------------------------------
+# Pytest: Test Runner
+# -----------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short -ra"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "integration: marks integration tests",
+]
+
+# -----------------------------------------------------------------------------
+# Coverage: Test Coverage
+# -----------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["spikeseg"]
+branch = true
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+fail_under = 70
+
+# -----------------------------------------------------------------------------
+# MyPy: Static Type Checker
+# -----------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "numpy.*",
+    "scipy.*",
+    "h5py.*",
+    "matplotlib.*",
+    "cv2.*",
+    "sklearn.*",
+    "tqdm.*",
+]
+ignore_missing_imports = true

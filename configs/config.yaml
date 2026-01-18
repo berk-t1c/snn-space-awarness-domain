@@ -1,0 +1,154 @@
+# =============================================================================
+# SpikeSEG Training Configuration
+# =============================================================================
+#
+# Default configuration for STDP-based training of SpikeSEG.
+# 
+# Paper References:
+#   - Kheradpisheh et al. 2018 - "STDP-based spiking deep CNNs"
+#   - Kirkland et al. 2023 (IGARSS) - "Neuromorphic sensing for space domain awareness"
+#
+# Usage:
+#   python -m spikeseg.training.train --config configs/default.yaml
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Experiment Settings
+# -----------------------------------------------------------------------------
+experiment_name: "spikeseg_default"
+output_dir: "./runs"
+seed: 42
+device: "cuda"  # "cuda", "cuda:0", "cpu"
+
+# -----------------------------------------------------------------------------
+# Training Duration
+# -----------------------------------------------------------------------------
+max_epochs: 10
+max_samples_per_epoch: null  # null = use full dataset
+
+# Layer-wise training control
+train_conv1: false  # Conv1 uses fixed DoG/Gabor filters (no STDP)
+train_conv2: true   # Train Conv2 via STDP
+train_conv3: true   # Train Conv3 via STDP
+
+# Memory optimization
+clear_cache_interval: 1000  # Clear CUDA cache every N samples
+gradient_checkpointing: false  # Not used for STDP
+
+# -----------------------------------------------------------------------------
+# STDP Learning Parameters
+# -----------------------------------------------------------------------------
+# Paper (IGARSS 2023): α⁺ = 0.04, α⁻ = 0.03
+# Paper (Kheradpisheh 2018): α⁺ = 0.004, α⁻ = 0.003
+stdp:
+  lr_plus: 0.04           # LTP learning rate (potentiation)
+  lr_minus: 0.03          # LTD learning rate (depression)
+  weight_min: 0.0         # Minimum weight value
+  weight_max: 1.0         # Maximum weight value
+  weight_init_mean: 0.8   # Weight initialization mean
+  weight_init_std: 0.01   # Weight initialization std (IGARSS: 0.01)
+  use_soft_bounds: true   # Use multiplicative STDP: Δw = α·w·(1-w)
+
+# -----------------------------------------------------------------------------
+# Winner-Take-All (WTA) Parameters
+# -----------------------------------------------------------------------------
+wta:
+  mode: "global"          # "global", "local", or "both"
+  local_radius: 2         # Radius for local inhibition
+  enable_homeostasis: true
+  target_rate: 0.1        # Target firing rate for homeostasis
+  homeostasis_lr: 0.001   # Threshold adaptation rate
+  threshold_min: 1.0      # Minimum adaptive threshold
+  threshold_max: 100.0    # Maximum adaptive threshold
+
+# -----------------------------------------------------------------------------
+# Adaptive Thresholds (Homeostasis)
+# -----------------------------------------------------------------------------
+# Paper (Lee 2018): "In the event of a post-neuronal spike, we uniformly 
+# increase the firing threshold of all the post-units constituting the 
+# feature map."
+homeostasis:
+  enabled: true
+  theta_rest: 10.0        # Resting threshold (initial value)
+  theta_plus: 0.05        # Threshold increase per spike
+  tau_theta: 10000.0      # Decay time constant (higher = slower decay)
+  theta_max: 50.0         # Maximum threshold cap
+  
+  # Dead neuron recovery
+  dead_neuron_recovery: true
+  dead_threshold: 0.01    # Firing rate below this = dead neuron
+  recovery_boost: 0.1     # Weight perturbation magnitude for recovery
+
+# -----------------------------------------------------------------------------
+# Convergence Monitoring
+# -----------------------------------------------------------------------------
+convergence:
+  min_wins_per_neuron: 10   # Min WTA wins for neuron to be "converged"
+  target_ratio: 0.95        # Target fraction of converged neurons
+  patience: 5               # Epochs without improvement before stopping
+  delta_threshold: 0.0001   # Weight change threshold for convergence
+  check_interval: 100       # Check convergence every N samples
+
+# -----------------------------------------------------------------------------
+# Data Loading
+# -----------------------------------------------------------------------------
+data:
+  dataset: "ebssa"          # Dataset name
+  data_root: "./data"       # Data directory
+  batch_size: 1             # Batch size (typically 1 for online STDP)
+  num_workers: 4            # DataLoader workers
+  pin_memory: true          # Pin memory for faster GPU transfer
+  
+  # Event/spike parameters
+  timestep_ms: 100.0        # Simulation timestep in milliseconds
+  n_timesteps: 10           # Number of timesteps per sample
+  input_height: 128         # Input height
+  input_width: 128          # Input width
+  input_channels: 1         # Input channels
+  
+  # Processing
+  normalize: true           # Normalize event counts
+  shuffle_train: true       # Shuffle training data
+  shuffle_val: false        # Shuffle validation data
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+# Paper (IGARSS 2023): "4 features in layer 1, 36 features in layer 2"
+# Paper: "5×5 convolution kernel" for Conv1/Conv2, "7×7 final classification"
+model:
+  n_classes: 1              # Number of output classes (1 for binary segmentation)
+  conv1_channels: 4         # Conv1 output channels
+  conv2_channels: 36        # Conv2 output channels
+  kernel_sizes: [5, 5, 7]   # Kernel sizes for Conv1, Conv2, Conv3
+  pool_size: 2              # Pooling kernel size
+  
+  # Layer-wise leak (IGARSS 2023: "90% and 10% of threshold value")
+  thresholds: [10.0, 10.0, 10.0]  # Spike thresholds
+  leaks: [9.0, 1.0, 0.0]          # Leak values: 90%, 10%, 0% of threshold
+  
+  # Initialization
+  use_dog_filters: true     # Use Difference-of-Gaussians for Conv1
+
+# -----------------------------------------------------------------------------
+# Checkpointing
+# -----------------------------------------------------------------------------
+checkpoint:
+  save_dir: "checkpoints"   # Subdirectory for checkpoints
+  save_interval: 1          # Save every N epochs
+  keep_last_n: 3            # Keep last N checkpoints
+  save_best: true           # Save best model separately
+  save_on_interrupt: true   # Save on keyboard interrupt
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  log_dir: "logs"           # Subdirectory for logs
+  log_level: "INFO"         # Logging level
+  log_interval: 100         # Log every N samples
+  tensorboard: true         # Enable TensorBoard logging
+  wandb: false              # Enable Weights & Biases
+  wandb_project: "spikeseg" # W&B project name
+  print_model_summary: true # Print model summary at start
