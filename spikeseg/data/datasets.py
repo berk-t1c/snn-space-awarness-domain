@@ -1251,14 +1251,28 @@ class EBSSADataset(EventDataset):
                     t_min, t_max = 0.0, float('inf')
 
                 # Find object positions within event time window
-                if obj_ts is not None and len(obj_ts) > 0:
-                    obj_ts = np.asarray(obj_ts).flatten()
-                    # Filter to positions within time window
-                    time_mask = (obj_ts >= t_min) & (obj_ts <= t_max)
-                    if np.any(time_mask):
-                        pos_x = obj_x[time_mask]
-                        pos_y = obj_y[time_mask]
-                    else:
+                if obj_ts is not None:
+                    try:
+                        # Handle nested arrays: recursively flatten and convert to float
+                        obj_ts_flat = np.asarray(obj_ts).flatten()
+                        # If still object dtype, try to extract numeric values
+                        if obj_ts_flat.dtype == object:
+                            obj_ts_flat = np.array([float(x) if np.isscalar(x) else float(np.asarray(x).flatten()[0]) for x in obj_ts_flat])
+                        else:
+                            obj_ts_flat = obj_ts_flat.astype(float)
+
+                        if len(obj_ts_flat) > 0:
+                            # Filter to positions within time window
+                            time_mask = (obj_ts_flat >= t_min) & (obj_ts_flat <= t_max)
+                            if np.any(time_mask):
+                                pos_x = obj_x[time_mask]
+                                pos_y = obj_y[time_mask]
+                            else:
+                                pos_x, pos_y = obj_x, obj_y
+                        else:
+                            pos_x, pos_y = obj_x, obj_y
+                    except (ValueError, TypeError, IndexError):
+                        # If timestamp filtering fails, use all positions
                         pos_x, pos_y = obj_x, obj_y
                 else:
                     pos_x, pos_y = obj_x, obj_y
