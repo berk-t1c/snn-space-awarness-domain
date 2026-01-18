@@ -629,11 +629,17 @@ class LayerStats:
         self.weight_std = float(np.std(w))
         self.weight_sparsity = float(np.mean(np.abs(w) < 0.01))
     
-    def record_winners(self, winners: List[int]) -> None:
-        """Record WTA winners."""
+    def record_winners(self, winners: List) -> None:
+        """Record WTA winners.
+        
+        Args:
+            winners: List of feature indices (int) OR tuples (feature_idx, y, x)
+        """
         for w in winners:
-            if 0 <= w < self.n_features:
-                self.wins[w] += 1
+            # Handle both int and tuple formats
+            feature_idx = w[0] if isinstance(w, (tuple, list)) else w
+            if 0 <= feature_idx < self.n_features:
+                self.wins[feature_idx] += 1
     
     def compute_convergence(self, min_wins: int) -> float:
         """Compute fraction of converged features."""
