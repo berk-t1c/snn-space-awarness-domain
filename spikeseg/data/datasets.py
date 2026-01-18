@@ -1279,17 +1279,25 @@ class EBSSADataset(EventDataset):
 
                 # Create mask around object positions (use mean position for static mask)
                 if len(pos_x) > 0:
-                    # Use all positions or subsample for efficiency
-                    radius = 3  # Mask radius in output pixels
-                    for i in range(0, len(pos_x), max(1, len(pos_x) // 100)):
-                        x = int(pos_x[i] * scale_x)
-                        y = int(pos_y[i] * scale_y)
-                        # Create circular mask around object
-                        y1 = max(0, y - radius)
-                        y2 = min(self.height, y + radius + 1)
-                        x1 = max(0, x - radius)
-                        x2 = min(self.width, x + radius + 1)
-                        mask[y1:y2, x1:x2] = 1
+                    # Ensure pos_x and pos_y are flat numeric arrays
+                    try:
+                        pos_x = np.asarray(pos_x).flatten().astype(float)
+                        pos_y = np.asarray(pos_y).flatten().astype(float)
+                    except (ValueError, TypeError):
+                        # If conversion fails, skip mask creation
+                        pass
+                    else:
+                        # Use all positions or subsample for efficiency
+                        radius = 3  # Mask radius in output pixels
+                        for i in range(0, len(pos_x), max(1, len(pos_x) // 100)):
+                            x = int(pos_x[i] * scale_x)
+                            y = int(pos_y[i] * scale_y)
+                            # Create circular mask around object
+                            y1 = max(0, y - radius)
+                            y2 = min(self.height, y + radius + 1)
+                            x1 = max(0, x - radius)
+                            x2 = min(self.width, x + radius + 1)
+                            mask[y1:y2, x1:x2] = 1
 
         # Fallback: Try bounding box format
         elif 'bbox' in labels:
