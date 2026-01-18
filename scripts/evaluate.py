@@ -156,7 +156,24 @@ def load_model(checkpoint_path: Path, device: torch.device) -> SpikeSEGEncoder:
     )
 
     model = SpikeSEGEncoder(enc_config)
-    model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Handle state dict with 'encoder.' prefix from training
+    state_dict = checkpoint['model_state_dict']
+
+    # Strip 'encoder.' prefix if present
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith('encoder.'):
+            new_key = key[len('encoder.'):]
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+
+    # Filter out non-parameter keys (membrane, has_fired, etc.)
+    param_keys = set(model.state_dict().keys())
+    filtered_state_dict = {k: v for k, v in new_state_dict.items() if k in param_keys}
+
+    model.load_state_dict(filtered_state_dict, strict=False)
     model.to(device)
     model.eval()
 
