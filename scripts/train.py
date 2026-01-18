@@ -67,7 +67,7 @@ from torch.utils.data import DataLoader, Dataset
 
 # Type checking imports (not imported at runtime)
 if TYPE_CHECKING:
-    from ..learning.stdp import STDPLearner
+    from spikeseg.learning.stdp import STDPLearner
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -1234,7 +1234,7 @@ class STDPTrainer:
         # STDP learner (uses learning/stdp.py module)
         self.stdp_learner: Optional[STDPLearner] = None
         try:
-            from ..learning.stdp import STDPLearner, STDPConfig as STDPLearnerConfig
+            from spikeseg.learning.stdp import STDPLearner, STDPConfig as STDPLearnerConfig
             stdp_cfg = STDPLearnerConfig(
                 lr_plus=config.stdp.lr_plus,
                 lr_minus=config.stdp.lr_minus,
@@ -1313,7 +1313,7 @@ class STDPTrainer:
         self.logger.info("Creating SpikeSEG model...")
         
         # Import here to avoid circular imports
-        from ..models import SpikeSEG, EncoderConfig, LayerConfig
+        from spikeseg.models import SpikeSEG, EncoderConfig, LayerConfig
         
         cfg = self.config.model
         
@@ -1375,7 +1375,7 @@ class STDPTrainer:
     def _initialize_dog_filters(self, model: nn.Module) -> None:
         """Initialize Conv1 with Difference of Gaussians filters."""
         try:
-            from ..core.functional import create_dog_filters
+            from spikeseg.core.functional import create_dog_filters
             
             k = self.config.model.kernel_sizes[0]
             dog = create_dog_filters(size=k, sigma_center=1.0, sigma_surround=2.0)
@@ -1405,7 +1405,7 @@ class STDPTrainer:
         self.logger.info("Setting up data loaders...")
 
         try:
-            from ..data import (
+            from spikeseg.data import (
                 get_dataset, create_dataloader,
                 EBSSADataset, SyntheticEventDataset
             )
