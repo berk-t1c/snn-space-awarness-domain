@@ -71,10 +71,10 @@ wta:
 # threshold of all the post-units constituting the feature map."
 homeostasis:
   enabled: true           # CRITICAL: Must be true for IGARSS 2023 / EBSSA
-  theta_rest: 10.0        # Resting threshold (should match base threshold)
-  theta_plus: 0.5         # Threshold increase per spike (5% of base threshold)
+  theta_rest: 1.0         # Resting threshold (should match base threshold)
+  theta_plus: 0.05        # Threshold increase per spike (5% of base threshold)
   tau_theta: 1000.0       # Decay time constant (faster decay for small data)
-  theta_max: 50.0         # Maximum threshold cap (5x base threshold)
+  theta_max: 5.0          # Maximum threshold cap (5x base threshold)
 
   # Dead neuron recovery
   dead_neuron_recovery: true
@@ -150,10 +150,13 @@ model:
 
   # Layer thresholds and leaks (IGARSS 2023)
   # Paper: "λ is set to 90% and 10% of the neuron threshold in layers 1 and 2"
-  # Using threshold=10.0 as base (Kheradpisheh 2018 standard)
-  # NOTE: Homeostasis (PENT) will adapt these thresholds during training
-  thresholds: [10.0, 10.0, 10.0]  # Base thresholds (will be adapted via homeostasis)
-  leaks: [9.0, 1.0, 0.0]          # Leak values: 90%, 10%, 0% of threshold
+  # NOTE: Threshold must match input data magnitude!
+  # - EBSSA events are SPARSE (unlike dense N-MNIST)
+  # - Normalized voxel input [0,1] with weights ~0.8
+  # - With 5x5 kernel, max input ~20, but sparse events give ~0.5-2.0
+  # - Threshold=1.0 allows accumulation over ~5-10 timesteps
+  thresholds: [1.0, 1.0, 1.0]    # Lower thresholds for sparse event data
+  leaks: [0.9, 0.1, 0.0]         # Leak values: 90%, 10%, 0% of threshold
 
   # Initialization
   use_dog_filters: true     # Use Difference-of-Gaussians for Conv1
