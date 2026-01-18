@@ -197,13 +197,13 @@ def load_config(
 
 @dataclass
 class STDPParams:
-    """STDP learning parameters (Kheradpisheh 2018)."""
-    lr_plus: float = 0.004   # α⁺ potentiation rate
-    lr_minus: float = 0.003  # α⁻ depression rate
+    """STDP learning parameters (IGARSS 2023 / EBSSA)."""
+    lr_plus: float = 0.04    # α⁺ potentiation rate (IGARSS 2023: 10x higher)
+    lr_minus: float = 0.03   # α⁻ depression rate (IGARSS 2023: 10x higher)
     weight_min: float = 0.0
     weight_max: float = 1.0
     weight_init_mean: float = 0.8
-    weight_init_std: float = 0.05
+    weight_init_std: float = 0.01  # IGARSS 2023: 0.01
     use_soft_bounds: bool = True
     
     @classmethod
@@ -214,18 +214,17 @@ class STDPParams:
 
 @dataclass
 class ModelParams:
-    """Model architecture parameters (Kheradpisheh 2018)."""
-    n_classes: int = 1
+    """Model architecture parameters (IGARSS 2023 / EBSSA)."""
+    n_classes: int = 2       # Binary segmentation for EBSSA
     conv1_channels: int = 4
     conv2_channels: int = 36
     kernel_sizes: tuple = (5, 5, 7)
-    # Pool1: 7×7 kernel, stride 6 (almost no overlap) - Kheradpisheh 2018
-    pool1_kernel: int = 7
-    pool1_stride: int = 6
-    # Pool2: 2×2 kernel, stride 2 (no overlap)
+    # Pool1/Pool2: 2×2 kernel, stride 2 (IGARSS 2023 standard pooling)
+    pool1_kernel: int = 2
+    pool1_stride: int = 2
     pool2_kernel: int = 2
     pool2_stride: int = 2
-    thresholds: tuple = (10.0, 60.0, 2.0)
+    thresholds: tuple = (10.0, 10.0, 10.0)  # Adaptive via PENT
     leaks: tuple = (9.0, 6.0, 0.0)
     use_dog_filters: bool = True
     
