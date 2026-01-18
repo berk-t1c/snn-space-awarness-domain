@@ -153,6 +153,11 @@ def load_model(checkpoint_path: Path, device: torch.device) -> SpikeSEGEncoder:
         conv1=LayerConfig(out_channels=4, kernel_size=5, threshold=thresholds[0], leak=leaks[0]),
         conv2=LayerConfig(out_channels=36, kernel_size=5, threshold=thresholds[1], leak=leaks[1]),
         conv3=LayerConfig(out_channels=2, kernel_size=7, threshold=thresholds[2], leak=leaks[2]),
+        # IGARSS 2023: 2x2 pooling (not Kheradpisheh's 7x7 stride 6)
+        pool1_kernel_size=2,
+        pool1_stride=2,
+        pool2_kernel_size=2,
+        pool2_stride=2,
     )
 
     model = SpikeSEGEncoder(enc_config)
