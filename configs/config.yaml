@@ -96,7 +96,7 @@ convergence:
 # -----------------------------------------------------------------------------
 data:
   dataset: "ebssa"          # Dataset name
-  data_root: "./data"       # Data directory
+  data_root: "../ebssa-data-utah/ebssa"  # Data directory (contains 'Labelled Data' folder)
   batch_size: 1             # Batch size (typically 1 for online STDP)
   num_workers: 4            # DataLoader workers
   pin_memory: true          # Pin memory for faster GPU transfer
