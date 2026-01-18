@@ -71,10 +71,10 @@ wta:
 # threshold of all the post-units constituting the feature map."
 homeostasis:
   enabled: true           # CRITICAL: Must be true for IGARSS 2023 / EBSSA
-  theta_rest: 0.5         # Resting threshold (lower for sparse event data)
-  theta_plus: 0.05        # Threshold increase per spike
+  theta_rest: 0.01        # Resting threshold (very low for sparse event data)
+  theta_plus: 0.001       # Threshold increase per spike (smaller steps)
   tau_theta: 10000.0      # Decay time constant (higher = slower decay)
-  theta_max: 10.0         # Maximum threshold cap (lower for sparse events)
+  theta_max: 1.0          # Maximum threshold cap (lower for sparse events)
 
   # Dead neuron recovery
   dead_neuron_recovery: true
@@ -134,9 +134,9 @@ model:
 
   # Adaptive thresholds via homeostasis (PENT) - see homeostasis section
   # Initial thresholds (will be adapted during training)
-  # Lower thresholds for sparse event data
-  thresholds: [0.5, 0.5, 0.5]     # Starting thresholds (adaptive via PENT)
-  leaks: [0.45, 0.05, 0.0]        # Leak values: 90%, 10%, 0% of threshold
+  # Very low thresholds for sparse event data
+  thresholds: [0.01, 0.01, 0.01]  # Starting thresholds (adaptive via PENT)
+  leaks: [0.009, 0.001, 0.0]      # Leak values: 90%, 10%, 0% of threshold
 
   # Initialization
   use_dog_filters: true     # Use Difference-of-Gaussians for Conv1
