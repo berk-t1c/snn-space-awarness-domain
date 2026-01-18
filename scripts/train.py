@@ -1776,18 +1776,33 @@ class STDPTrainer:
                 # Record stats
                 result['homeostasis'] = threshold_mgr.get_stats()
             
-            # Find WTA winners
-            winners = self._find_wta_winners(post_spikes)
-            result['winners'] = winners
-            
+            # Get membrane potential for WTA tie-breaking (if available)
+            membrane = None
+            if hasattr(enc_output, 'layer_membrane') and layer_name in enc_output.layer_membrane:
+                membrane = enc_output.layer_membrane[layer_name]
+            elif hasattr(self.model.encoder, layer_name):
+                layer_module = getattr(self.model.encoder, layer_name)
+                if hasattr(layer_module, 'membrane'):
+                    membrane = layer_module.membrane
+
+            # Find WTA winners with spatial locations
+            # Returns list of (feature_idx, y, x) tuples
+            winners = self._find_wta_winners(post_spikes, membrane)
+            result['winners'] = [w[0] for w in winners]  # Extract feature indices for metrics
+
             # Apply STDP if we have winners
             if winners:
                 # Get pre-synaptic spikes
                 pre_spikes = self._get_pre_spikes(x, enc_output, layer_name)
-                
+
                 if pre_spikes is not None:
+                    # Get kernel size for receptive field extraction
+                    layer_module = getattr(self.model.encoder, layer_name)
+                    kernel_size = layer_module.conv.kernel_size[0]
+
                     result['n_updates'] = self._apply_stdp_update(
-                        layer_name, pre_spikes, post_spikes, winners
+                        layer_name, pre_spikes, post_spikes, winners,
+                        kernel_size=kernel_size
                     )
             
             # ============================================================
@@ -1841,179 +1856,245 @@ class STDPTrainer:
         
         return pre
     
-    def _find_wta_winners(self, spikes: torch.Tensor) -> List[int]:
+    def _find_wta_winners(
+        self,
+        spikes: torch.Tensor,
+        membrane: Optional[torch.Tensor] = None
+    ) -> List[Tuple[int, int, int]]:
         """
-        Find Winner-Take-All winners.
-        
+        Find Winner-Take-All winners WITH spatial locations.
+
+        Paper Reference (Kheradpisheh 2018):
+            "A WTA mechanism is used to enforce competition. The first neuron
+            to fire inhibits all others in its competition group."
+
+            "pick the one which has the highest potential" for tie-breaking
+
         Args:
             spikes: Spike tensor (B, C, H, W).
-        
+            membrane: Optional membrane potential for tie-breaking (B, C, H, W).
+
         Returns:
-            List of winning feature indices.
+            List of (feature_idx, y, x) tuples for each winner.
+            Global WTA: One winner per feature map (intra-map competition).
         """
         wta_cfg = self.config.wta
-        
-        if wta_cfg.mode == 'global':
+        winners = []
+
+        # Ensure 4D
+        if spikes.dim() == 3:
+            spikes = spikes.unsqueeze(0)
+        if membrane is not None and membrane.dim() == 3:
+            membrane = membrane.unsqueeze(0)
+
+        batch, n_channels, H, W = spikes.shape
+
+        # Use first batch item for winner selection
+        spikes_b = spikes[0]  # (C, H, W)
+        membrane_b = membrane[0] if membrane is not None else None
+
+        if wta_cfg.mode in ('global', 'both'):
             # Global WTA: one winner per feature map (intra-map competition)
-            # Find features that have the most spikes
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))  # Sum over batch and space
-            else:
-                spike_counts = spikes.sum()
-            
-            # Get features that fired
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
-        
+            # Paper: "global intra-map competition"
+
+            for c in range(n_channels):
+                # Find all spiking locations in this feature map
+                spike_locs = torch.nonzero(spikes_b[c] > 0, as_tuple=False)
+
+                if len(spike_locs) == 0:
+                    continue
+
+                if len(spike_locs) == 1:
+                    # Single spike - this is the winner
+                    y, x = spike_locs[0].tolist()
+                    winners.append((c, y, x))
+                else:
+                    # Multiple spikes - use membrane potential for tie-breaking
+                    # Paper: "pick the one which has the highest potential"
+                    if membrane_b is not None:
+                        best_idx = 0
+                        best_potential = -float('inf')
+                        for i, loc in enumerate(spike_locs):
+                            y, x = loc.tolist()
+                            pot = membrane_b[c, y, x].item()
+                            if pot > best_potential:
+                                best_potential = pot
+                                best_idx = i
+                        y, x = spike_locs[best_idx].tolist()
+                    else:
+                        # Random selection fallback
+                        idx = torch.randint(len(spike_locs), (1,)).item()
+                        y, x = spike_locs[idx].tolist()
+
+                    winners.append((c, y, x))
+
         elif wta_cfg.mode == 'local':
-            # Local WTA: competition within spatial neighborhoods
-            # Simplified: just return all firing features
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))
-            else:
-                spike_counts = spikes.sum()
-            
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
-        
-        else:  # 'both'
-            # Combined: use global for now
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))
-            else:
-                spike_counts = spikes.sum()
-            
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
+            # Local WTA: inter-map competition at each spatial location
+            # Paper: "local inter-map competition"
+
+            for y in range(H):
+                for x in range(W):
+                    # Find all channels that spiked at this location
+                    spiking_channels = torch.nonzero(spikes_b[:, y, x] > 0, as_tuple=True)[0]
+
+                    if len(spiking_channels) == 0:
+                        continue
+
+                    if len(spiking_channels) == 1:
+                        c = spiking_channels[0].item()
+                        winners.append((c, y, x))
+                    else:
+                        # Multiple channels spiked - use membrane for tie-breaking
+                        if membrane_b is not None:
+                            potentials = membrane_b[spiking_channels, y, x]
+                            best_idx = potentials.argmax().item()
+                            c = spiking_channels[best_idx].item()
+                        else:
+                            idx = torch.randint(len(spiking_channels), (1,)).item()
+                            c = spiking_channels[idx].item()
+
+                        winners.append((c, y, x))
+
+        return winners
     
     def _apply_stdp_update(
         self,
         layer_name: str,
         pre_spikes: torch.Tensor,
         post_spikes: torch.Tensor,
-        winners: List[int]
+        winners: List[Tuple[int, int, int]],
+        kernel_size: Optional[int] = None,
+        stride: int = 1,
+        padding: int = 0
     ) -> int:
         """
-        Apply STDP weight update using proper spike timing.
-        
+        Apply STDP weight update using WINNER'S SPECIFIC RECEPTIVE FIELD.
+
         Paper STDP Rule (Kheradpisheh 2018, Equation 3):
             Δw_ij = a⁺ · w_ij · (1 - w_ij)    if t_pre ≤ t_post  (LTP)
             Δw_ij = -a⁻ · w_ij · (1 - w_ij)   if t_pre > t_post  (LTD)
-        
-        Key insight: "The exact time difference does not affect the weight 
-        change, but only its sign is considered."
-        
+
+        CRITICAL: Each winner updates weights based on ITS OWN receptive field,
+        not global activity. This ensures different neurons learn different patterns.
+
+        Paper: "The winner triggers the STDP and updates its synaptic weights.
+        As mentioned before, neurons in different locations of the same map have
+        the same input synaptic weights (i.e., weight sharing). Hence, the winner
+        neuron prevents other neurons in its own map to do STDP and duplicates
+        its updated synaptic weights into them."
+
         Args:
             layer_name: Name of layer to update.
             pre_spikes: Pre-synaptic spikes (B, C, H, W) or (T, B, C, H, W).
             post_spikes: Post-synaptic spikes (B, C, H, W) or (T, B, C, H, W).
-            winners: List of winning feature map indices.
-        
+            winners: List of (feature_idx, y, x) tuples from WTA.
+            kernel_size: Convolution kernel size (auto-detected if None).
+            stride: Convolution stride.
+            padding: Convolution padding.
+
         Returns:
             Number of weights updated.
         """
         layer = getattr(self.model.encoder, layer_name)
         stdp_cfg = self.config.stdp
-        
+
         n_updates = 0
-        
+
         with torch.no_grad():
             weights = layer.conv.weight  # (out_ch, in_ch, kH, kW)
-            
-            # ================================================================
-            # Use STDPLearner if available (proper timing-based)
-            # ================================================================
-            if self.stdp_learner is not None:
-                try:
-                    from ..learning.stdp import get_first_spike_times
-                    
-                    # Get first spike times
-                    # Handle time dimension if present
-                    if pre_spikes.dim() == 5:  # (T, B, C, H, W)
-                        pre_times = get_first_spike_times(pre_spikes[:, 0])  # First batch
-                    elif pre_spikes.dim() == 4:  # (B, C, H, W) - treat as single timestep
-                        pre_times = get_first_spike_times(pre_spikes.unsqueeze(0)[:, 0])
-                    else:
-                        pre_times = get_first_spike_times(pre_spikes.unsqueeze(0))
-                    
-                    if post_spikes.dim() == 5:
-                        post_times = get_first_spike_times(post_spikes[:, 0])
-                    elif post_spikes.dim() == 4:
-                        post_times = get_first_spike_times(post_spikes.unsqueeze(0)[:, 0])
-                    else:
-                        post_times = get_first_spike_times(post_spikes.unsqueeze(0))
-                    
-                    # Create winner mask
-                    winner_mask = torch.zeros_like(post_times, dtype=torch.bool)
-                    for w_idx in winners:
-                        if w_idx < winner_mask.shape[0]:
-                            winner_mask[w_idx] = True
-                    
-                    # Compute batch update
-                    delta_w = self.stdp_learner.compute_batch_update(
-                        weights=weights,
-                        pre_spike_times=pre_times,
-                        post_spike_times=post_times,
-                        winner_mask=winner_mask.unsqueeze(0) if winner_mask.dim() == 3 else winner_mask
-                    )
-                    
-                    # Apply update
-                    weights.add_(delta_w)
-                    weights.clamp_(stdp_cfg.weight_min, stdp_cfg.weight_max)
-                    
-                    return int((delta_w != 0).sum().item())
-                    
-                except Exception as e:
-                    # Fall back to simplified STDP
-                    self.logger.debug(f"STDPLearner failed: {e}, using simplified STDP")
-            
-            # ================================================================
-            # Simplified STDP (fallback)
-            # Uses activity-based update instead of spike timing
-            # ================================================================
-            
-            # Compute pre-synaptic activity
+            out_ch, in_ch, kH, kW = weights.shape
+
+            if kernel_size is None:
+                kernel_size = kH
+
+            # Collapse time dimension if present
             if pre_spikes.dim() == 5:  # (T, B, C, H, W)
-                pre_active = (pre_spikes.sum(dim=(0, 1)) > 0).float()  # (C, H, W)
-            elif pre_spikes.dim() == 4:  # (B, C, H, W)
-                pre_active = (pre_spikes.sum(dim=0) > 0).float()  # (C, H, W)
-            else:
-                pre_active = (pre_spikes > 0).float()
-            
-            # Average pre-synaptic activity per channel
-            pre_channel_active = pre_active.mean(dim=(1, 2))  # (C,)
-            
-            # Update each winning feature map
-            for winner_idx in winners:
-                if winner_idx >= weights.shape[0]:
+                pre_spikes = pre_spikes.sum(dim=0)  # (B, C, H, W)
+            if post_spikes.dim() == 5:
+                post_spikes = post_spikes.sum(dim=0)
+
+            # Use first batch
+            pre_spikes_b = pre_spikes[0] if pre_spikes.dim() == 4 else pre_spikes  # (C, H, W)
+
+            pre_C, pre_H, pre_W = pre_spikes_b.shape
+
+            # ================================================================
+            # Process each winner with ITS SPECIFIC receptive field
+            # This is the KEY fix: each winner sees different input patterns
+            # ================================================================
+            for winner_feat, winner_y, winner_x in winners:
+                if winner_feat >= out_ch:
                     continue
-                
-                w = weights[winner_idx]  # (in_ch, kH, kW)
-                
+
                 # ============================================================
-                # Multiplicative STDP with soft bounds
-                # Δw = α · w · (1 - w) · pre_activity
+                # Extract receptive field at winner's spatial location
+                # Paper: "the input pattern that was responsible for this spike"
                 # ============================================================
+
+                # Compute receptive field coordinates (accounting for stride/padding)
+                rf_y_start = winner_y * stride - padding
+                rf_x_start = winner_x * stride - padding
+                rf_y_end = rf_y_start + kernel_size
+                rf_x_end = rf_x_start + kernel_size
+
+                # Create receptive field spike tensor (handle boundary conditions)
+                rf_spikes = torch.zeros(in_ch, kernel_size, kernel_size,
+                                       device=pre_spikes_b.device, dtype=pre_spikes_b.dtype)
+
+                # Compute valid regions
+                src_y_start = max(0, rf_y_start)
+                src_y_end = min(pre_H, rf_y_end)
+                src_x_start = max(0, rf_x_start)
+                src_x_end = min(pre_W, rf_x_end)
+
+                dst_y_start = src_y_start - rf_y_start
+                dst_y_end = dst_y_start + (src_y_end - src_y_start)
+                dst_x_start = src_x_start - rf_x_start
+                dst_x_end = dst_x_start + (src_x_end - src_x_start)
+
+                # Copy valid region
+                if src_y_end > src_y_start and src_x_end > src_x_start:
+                    rf_spikes[:, dst_y_start:dst_y_end, dst_x_start:dst_x_end] = \
+                        pre_spikes_b[:, src_y_start:src_y_end, src_x_start:src_x_end]
+
+                # ============================================================
+                # STDP update based on this winner's specific receptive field
+                # Paper: "pre fires before post → LTP, pre fires after post → LTD"
+                # Simplified: active pre-synaptic = LTP, inactive = LTD
+                # ============================================================
+
+                # Pre-synaptic activity in receptive field (shape matches weights)
+                pre_active = (rf_spikes > 0).float()  # (in_ch, kH, kW)
+
+                # Current weights for this feature map
+                w = weights[winner_feat]  # (in_ch, kH, kW)
+
+                # Multiplicative soft bounds: w * (1 - w)
+                # Paper: "provides soft bounds in [0, 1]"
                 soft_bound = w * (1.0 - w)
-                
-                # LTP for active pre-synaptic inputs
-                ltp = stdp_cfg.lr_plus * soft_bound * pre_channel_active.view(-1, 1, 1)
-                
-                # LTD for inactive pre-synaptic inputs (they "fire later" / don't contribute)
-                ltd = stdp_cfg.lr_minus * soft_bound * (1 - pre_channel_active.view(-1, 1, 1))
-                
+
+                # LTP for active pre-synaptic inputs (pre fires before/at post)
+                # These synapses contributed to the post-synaptic spike
+                delta_ltp = stdp_cfg.lr_plus * soft_bound * pre_active
+
+                # LTD for inactive pre-synaptic inputs (pre fires after post)
+                # Paper: "if a presynaptic neuron does not fire before the
+                # postsynaptic one, it will fire later"
+                delta_ltd = stdp_cfg.lr_minus * soft_bound * (1.0 - pre_active)
+
                 # Combined update
-                delta_w = ltp - ltd
-                
+                delta_w = delta_ltp - delta_ltd
+
                 # Apply update with clamping
-                weights[winner_idx] = torch.clamp(
+                # Paper: "all weights are bounded in [0, 1]"
+                weights[winner_feat] = torch.clamp(
                     w + delta_w,
                     stdp_cfg.weight_min,
                     stdp_cfg.weight_max
                 )
-                
+
                 n_updates += w.numel()
-        
+
         return n_updates
     
     # =========================================================================
