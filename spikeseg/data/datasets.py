@@ -889,6 +889,7 @@ class EBSSADataset(EventDataset):
         normalize: bool = True,
         polarity_channels: bool = True,
         use_labels: bool = True,
+        include_unlabelled: bool = False,
         train_ratio: float = 0.8,
         transform: Optional[Callable] = None,
         augmentation: Optional[EventAugmentation] = None,
@@ -907,6 +908,7 @@ class EBSSADataset(EventDataset):
             normalize: Normalize voxel values.
             polarity_channels: Separate polarity channels.
             use_labels: Load labels if available.
+            include_unlabelled: Include unlabelled data (for unsupervised training).
             train_ratio: Train/val split ratio.
             transform: Optional transform.
             augmentation: Optional augmentation.
@@ -933,6 +935,7 @@ class EBSSADataset(EventDataset):
         self.split = split
         self.sensor = sensor
         self.use_labels = use_labels
+        self.include_unlabelled = include_unlabelled
         self.train_ratio = train_ratio
         
         # Default sensor resolution for loading
@@ -953,48 +956,64 @@ class EBSSADataset(EventDataset):
         """Find all recording files."""
         recordings = []
         
-        # Check different directory structures
+        # Build list of directories to search
+        search_dirs = []
+        
+        # Check labelled directory structures
         labelled_dir = self.root / "Labelled Data"
         if not labelled_dir.exists():
             labelled_dir = self.root / "Labelled_Data"
-        if not labelled_dir.exists():
-            labelled_dir = self.root
+        if labelled_dir.exists():
+            search_dirs.append(labelled_dir)
         
-        # Find .mat files
-        for mat_path in sorted(labelled_dir.rglob("*.mat")):
-            # Skip pure label files (e.g., *_labels.mat), but keep *_labelled.mat
-            # EBSSA format: event files are named *_labelled.mat (contains events + labels)
-            stem_lower = mat_path.stem.lower()
-            if stem_lower.endswith('_labels') or (
-                '_labels' in stem_lower and not stem_lower.endswith('_labelled')
-            ):
-                continue
-            
-            # Check sensor
-            parent_name = mat_path.parent.name.upper()
-            if self.sensor != "all" and self.sensor.upper() not in parent_name:
-                # Check if it's in the correct sensor folder
-                if self.sensor.upper() not in str(mat_path).upper():
+        # Add unlabelled directory if requested (for unsupervised STDP)
+        if self.include_unlabelled:
+            unlabelled_dir = self.root / "Unlabelled Data"
+            if not unlabelled_dir.exists():
+                unlabelled_dir = self.root / "Unlabelled_Data"
+            if unlabelled_dir.exists():
+                search_dirs.append(unlabelled_dir)
+        
+        # Fallback to root if no specific dirs found
+        if not search_dirs:
+            search_dirs.append(self.root)
+        
+        # Find .mat files in all search directories
+        for search_dir in search_dirs:
+            for mat_path in sorted(search_dir.rglob("*.mat")):
+                # Skip pure label files (e.g., *_labels.mat), but keep *_labelled.mat
+                # EBSSA format: event files are named *_labelled.mat (contains events + labels)
+                stem_lower = mat_path.stem.lower()
+                if stem_lower.endswith('_labels') or (
+                    '_labels' in stem_lower and not stem_lower.endswith('_labelled')
+                ):
                     continue
-            
-            # Find corresponding label file
-            label_path = None
-            if self.use_labels:
-                label_candidates = [
-                    mat_path.parent / f"{mat_path.stem}_labels.mat",
-                    mat_path.parent / "Labels" / f"{mat_path.stem}_labels.mat",
-                    labelled_dir / "Labels" / f"{mat_path.stem}_labels.mat",
-                ]
-                for candidate in label_candidates:
-                    if candidate.exists():
-                        label_path = candidate
-                        break
-            
-            recordings.append({
-                'event_path': mat_path,
-                'label_path': label_path,
-                'name': mat_path.stem
-            })
+                
+                # Check sensor
+                parent_name = mat_path.parent.name.upper()
+                if self.sensor != "all" and self.sensor.upper() not in parent_name:
+                    # Check if it's in the correct sensor folder
+                    if self.sensor.upper() not in str(mat_path).upper():
+                        continue
+                
+                # Find corresponding label file
+                label_path = None
+                if self.use_labels:
+                    label_candidates = [
+                        mat_path.parent / f"{mat_path.stem}_labels.mat",
+                        mat_path.parent / "Labels" / f"{mat_path.stem}_labels.mat",
+                        search_dir / "Labels" / f"{mat_path.stem}_labels.mat",
+                    ]
+                    for candidate in label_candidates:
+                        if candidate.exists():
+                            label_path = candidate
+                            break
+                
+                recordings.append({
+                    'event_path': mat_path,
+                    'label_path': label_path,
+                    'name': mat_path.stem
+                })
         
         return recordings
     

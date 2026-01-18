@@ -274,6 +274,7 @@ class DataParams:
     dataset: str = "ebssa"       # Dataset name
     data_root: str = "./data"    # Data directory
     sensor: str = "all"          # Sensor type: "DAVIS", "ATIS", or "all"
+    include_unlabelled: bool = True  # Include unlabelled data (for unsupervised STDP)
     batch_size: int = 1          # Batch size (typically 1 for online STDP)
     num_workers: int = 4         # DataLoader workers
     pin_memory: bool = True      # Pin memory for faster GPU transfer
@@ -1438,7 +1439,8 @@ class STDPTrainer:
                         height=data_cfg.input_height,
                         width=data_cfg.input_width,
                         polarity_channels=(data_cfg.input_channels == 2),
-                        normalize=data_cfg.normalize
+                        normalize=data_cfg.normalize,
+                        include_unlabelled=data_cfg.include_unlabelled
                     )
                     val_dataset = EBSSADataset(
                         root=data_cfg.data_root,
@@ -1448,7 +1450,8 @@ class STDPTrainer:
                         height=data_cfg.input_height,
                         width=data_cfg.input_width,
                         polarity_channels=(data_cfg.input_channels == 2),
-                        normalize=data_cfg.normalize
+                        normalize=data_cfg.normalize,
+                        include_unlabelled=False  # Val uses only labelled
                     )
                     self.logger.info(f"Loaded EBSSA dataset: {len(train_dataset)} train, {len(val_dataset)} val")
                 except Exception as e:
