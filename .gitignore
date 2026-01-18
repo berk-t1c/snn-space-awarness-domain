@@ -34,8 +34,8 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data
-data/
+# Data (root level only, not spikeseg/data/)
+/data/
 *.mat
 *.h5
 *.hdf5
