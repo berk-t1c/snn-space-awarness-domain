@@ -72,9 +72,9 @@ wta:
 homeostasis:
   enabled: true           # CRITICAL: Must be true for IGARSS 2023 / EBSSA
   theta_rest: 0.1         # Resting threshold (should match base threshold)
-  theta_plus: 0.005       # Threshold increase per spike (5% of base threshold)
-  tau_theta: 1000.0       # Decay time constant (faster decay for small data)
-  theta_max: 0.5          # Maximum threshold cap (5x base threshold)
+  theta_plus: 0.02        # Stronger threshold increase (20% of base) to penalize winners faster
+  tau_theta: 500.0        # Faster decay to let suppressed neurons recover
+  theta_max: 10.0         # Much higher cap (100x base) to really suppress dominant neurons
 
   # Dead neuron recovery
   dead_neuron_recovery: true
