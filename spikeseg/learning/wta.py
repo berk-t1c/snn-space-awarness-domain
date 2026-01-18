@@ -251,7 +251,8 @@ class WTAConfig:
 
 def wta_global_membrane(
     spikes: torch.Tensor,
-    membrane: torch.Tensor
+    membrane: torch.Tensor,
+    pre_reset_membrane: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Global WTA with winner mask output.
@@ -268,7 +269,10 @@ def wta_global_membrane(
 
     Args:
         spikes: Current spikes, shape (batch, channels, height, width).
-        membrane: Current membrane potential, same shape.
+        membrane: Current membrane potential (post-reset), same shape.
+        pre_reset_membrane: Membrane potential BEFORE reset. If provided,
+                           used for tie-breaking (required for correct paper behavior).
+                           If None, falls back to membrane (may be incorrect if reset).
 
     Returns:
         Tuple of (filtered_spikes, new_membrane, winner_mask):
@@ -284,24 +288,29 @@ def wta_global_membrane(
     _validate_same_shape(spikes, membrane, "spikes", "membrane")
     _validate_same_device(spikes, membrane, "spikes", "membrane")
 
+    # Use pre_reset_membrane for tie-breaking if provided (Kheradpisheh 2018)
+    tiebreak_membrane = pre_reset_membrane if pre_reset_membrane is not None else membrane
+    if pre_reset_membrane is not None:
+        _validate_4d_tensor(pre_reset_membrane, "pre_reset_membrane")
+        _validate_same_shape(spikes, pre_reset_membrane, "spikes", "pre_reset_membrane")
+
     batch, channels, height, width = spikes.shape
     device = spikes.device
 
     # Flatten spatial dimensions
     spikes_flat = spikes.view(batch, channels, -1)  # (B, C, H*W)
-    membrane_flat = membrane.view(batch, channels, -1)  # (B, C, H*W)
+    tiebreak_flat = tiebreak_membrane.view(batch, channels, -1)  # (B, C, H*W)
 
     # Find if any neuron spiked in each feature map
     has_spike = spikes_flat.sum(dim=2) > 0  # (B, C)
 
-    # Mask membrane by spikes and find winner by highest potential (Kheradpisheh 2018)
+    # Find winner by highest potential among spiking neurons (Kheradpisheh 2018)
     # "pick the one which has the highest potential"
-    masked_membrane = membrane_flat * spikes_flat  # Only consider neurons that spiked
     # Use -inf for non-spiking neurons so they don't win
     masked_membrane = torch.where(
         spikes_flat > 0,
-        masked_membrane,
-        torch.tensor(float('-inf'), device=device, dtype=membrane.dtype)
+        tiebreak_flat,
+        torch.tensor(float('-inf'), device=device, dtype=tiebreak_membrane.dtype)
     )
     winner_idx = masked_membrane.argmax(dim=2)  # (B, C)
 
