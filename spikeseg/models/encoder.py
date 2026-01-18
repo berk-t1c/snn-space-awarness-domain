@@ -163,6 +163,9 @@ class EncoderOutput:
         layer_spikes: Dict of spikes at each layer (for HULK/ASH).
                      Each tensor has shape (T, B, C, H, W).
         layer_membranes: Dict of membrane potentials (optional).
+        layer_spike_times: Dict of first spike times per layer (B, C, H, W).
+                          Value of -1 means neuron never fired.
+                          Critical for proper STDP learning.
 
     Properties:
         has_spikes: True if any classification spikes occurred.
@@ -174,11 +177,14 @@ class EncoderOutput:
         ...     print(f"Detected {output.n_classification_spikes} spikes")
         >>> # Get spikes summed over time
         >>> total_spikes = output.classification_spikes.sum(dim=0)  # (B, C, H, W)
+        >>> # Get first spike times for STDP
+        >>> conv2_times = output.layer_spike_times['conv2']  # (B, C, H, W)
     """
     classification_spikes: torch.Tensor
     pooling_indices: PoolingIndices
     layer_spikes: Dict[str, torch.Tensor]
     layer_membranes: Optional[Dict[str, torch.Tensor]] = None
+    layer_spike_times: Optional[Dict[str, torch.Tensor]] = None
     
     @property
     def has_spikes(self) -> bool:
@@ -775,24 +781,45 @@ class SpikeSEGEncoder(nn.Module):
         all_layer_spikes: Dict[str, List[torch.Tensor]] = {
             'conv1': [], 'pool1': [], 'conv2': [], 'pool2': [], 'conv3': []
         }
-        
+
+        # Track first spike times for STDP (initialized to -1 = never fired)
+        # Shape will be (B, C, H, W) for each layer
+        layer_spike_times: Dict[str, torch.Tensor] = {}
+
         for t in range(n_timesteps):
             class_spikes_t, layer_spikes_t = self.forward_single_timestep(x[t])
             all_class_spikes.append(class_spikes_t)
-            
+
+            # Track first spike times for each layer
+            for name, spikes in layer_spikes_t.items():
+                if name not in layer_spike_times:
+                    # Initialize with -1 (never fired)
+                    layer_spike_times[name] = torch.full_like(
+                        spikes, fill_value=-1.0
+                    )
+
+                # Update spike times: record time t for neurons that fire
+                # for the first time (current time is -1 and now spiking)
+                first_spike_mask = (layer_spike_times[name] < 0) & (spikes > 0)
+                layer_spike_times[name] = torch.where(
+                    first_spike_mask,
+                    torch.full_like(layer_spike_times[name], fill_value=float(t)),
+                    layer_spike_times[name]
+                )
+
             if self.config.store_all_spikes:
                 for name, spikes in layer_spikes_t.items():
                     all_layer_spikes[name].append(spikes)
-        
+
         # Stack outputs: (T, B, C, H, W)
         classification_spikes = torch.stack(all_class_spikes, dim=0)
-        
+
         # Stack layer spikes if stored
         layer_spikes_stacked = {}
         if self.config.store_all_spikes:
             for name, spikes_list in all_layer_spikes.items():
                 layer_spikes_stacked[name] = torch.stack(spikes_list, dim=0)
-        
+
         # Create pooling indices container
         pooling_indices = PoolingIndices(
             pool1_indices=self._pool1_indices,
@@ -800,11 +827,12 @@ class SpikeSEGEncoder(nn.Module):
             pool1_output_size=self._pool1_input_size,
             pool2_output_size=self._pool2_input_size
         )
-        
+
         return EncoderOutput(
             classification_spikes=classification_spikes,
             pooling_indices=pooling_indices,
-            layer_spikes=layer_spikes_stacked
+            layer_spikes=layer_spikes_stacked,
+            layer_spike_times=layer_spike_times
         )
     
     def get_pooling_indices(self) -> PoolingIndices:

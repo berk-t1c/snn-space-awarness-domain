@@ -1394,18 +1394,128 @@ class STDPTrainer:
             self.logger.warning("Using random initialization for Conv1")
     
     def _setup_data_loaders(self) -> None:
-        """Setup data loaders."""
+        """Setup data loaders using spikeseg.data module."""
         self.logger.info("Setting up data loaders...")
-        
-        # Placeholder - implement based on your dataset
-        # from ..data import EBSSADataset, create_dataloader
-        
-        self.logger.warning(
-            "Data loaders not implemented. "
-            "Pass train_loader to trainer or implement _setup_data_loaders()"
-        )
-        self.train_loader = None
-        self.val_loader = None
+
+        try:
+            from ..data import (
+                get_dataset, create_dataloader,
+                EBSSADataset, SyntheticEventDataset
+            )
+
+            data_cfg = self.config.data
+
+            # Try to load real dataset first
+            if data_cfg.dataset.lower() == "ebssa":
+                try:
+                    train_dataset = EBSSADataset(
+                        root=data_cfg.data_root,
+                        split="train",
+                        n_timesteps=data_cfg.n_timesteps,
+                        height=data_cfg.input_height,
+                        width=data_cfg.input_width,
+                        polarity_channels=(data_cfg.input_channels == 2),
+                        normalize=data_cfg.normalize
+                    )
+                    val_dataset = EBSSADataset(
+                        root=data_cfg.data_root,
+                        split="val",
+                        n_timesteps=data_cfg.n_timesteps,
+                        height=data_cfg.input_height,
+                        width=data_cfg.input_width,
+                        polarity_channels=(data_cfg.input_channels == 2),
+                        normalize=data_cfg.normalize
+                    )
+                    self.logger.info(f"Loaded EBSSA dataset: {len(train_dataset)} train, {len(val_dataset)} val")
+                except Exception as e:
+                    self.logger.warning(f"Failed to load EBSSA dataset: {e}")
+                    self.logger.info("Falling back to synthetic dataset for testing")
+                    train_dataset = SyntheticEventDataset(
+                        n_samples=100,
+                        n_events_per_sample=1000,
+                        height=data_cfg.input_height,
+                        width=data_cfg.input_width,
+                        n_timesteps=data_cfg.n_timesteps,
+                        polarity_channels=(data_cfg.input_channels == 2),
+                        normalize=data_cfg.normalize,
+                        seed=self.config.seed
+                    )
+                    val_dataset = SyntheticEventDataset(
+                        n_samples=20,
+                        n_events_per_sample=1000,
+                        height=data_cfg.input_height,
+                        width=data_cfg.input_width,
+                        n_timesteps=data_cfg.n_timesteps,
+                        polarity_channels=(data_cfg.input_channels == 2),
+                        normalize=data_cfg.normalize,
+                        seed=self.config.seed + 1000
+                    )
+
+            elif data_cfg.dataset.lower() == "synthetic":
+                train_dataset = SyntheticEventDataset(
+                    n_samples=data_cfg.batch_size * 100,
+                    n_events_per_sample=1000,
+                    height=data_cfg.input_height,
+                    width=data_cfg.input_width,
+                    n_timesteps=data_cfg.n_timesteps,
+                    polarity_channels=(data_cfg.input_channels == 2),
+                    normalize=data_cfg.normalize,
+                    seed=self.config.seed
+                )
+                val_dataset = SyntheticEventDataset(
+                    n_samples=data_cfg.batch_size * 20,
+                    n_events_per_sample=1000,
+                    height=data_cfg.input_height,
+                    width=data_cfg.input_width,
+                    n_timesteps=data_cfg.n_timesteps,
+                    polarity_channels=(data_cfg.input_channels == 2),
+                    normalize=data_cfg.normalize,
+                    seed=self.config.seed + 1000
+                )
+                self.logger.info(f"Using synthetic dataset: {len(train_dataset)} train, {len(val_dataset)} val")
+
+            else:
+                # Try generic dataset loading
+                train_dataset = get_dataset(
+                    name=data_cfg.dataset,
+                    root=data_cfg.data_root,
+                    split="train",
+                    n_timesteps=data_cfg.n_timesteps,
+                    height=data_cfg.input_height,
+                    width=data_cfg.input_width
+                )
+                val_dataset = get_dataset(
+                    name=data_cfg.dataset,
+                    root=data_cfg.data_root,
+                    split="val",
+                    n_timesteps=data_cfg.n_timesteps,
+                    height=data_cfg.input_height,
+                    width=data_cfg.input_width
+                )
+
+            # Create data loaders
+            self.train_loader = create_dataloader(
+                train_dataset,
+                batch_size=data_cfg.batch_size,
+                shuffle=data_cfg.shuffle_train,
+                num_workers=data_cfg.num_workers,
+                pin_memory=data_cfg.pin_memory
+            )
+            self.val_loader = create_dataloader(
+                val_dataset,
+                batch_size=data_cfg.batch_size,
+                shuffle=data_cfg.shuffle_val,
+                num_workers=data_cfg.num_workers,
+                pin_memory=data_cfg.pin_memory
+            )
+
+            self.logger.info(f"Data loaders ready: batch_size={data_cfg.batch_size}")
+
+        except ImportError as e:
+            self.logger.warning(f"Could not import data module: {e}")
+            self.logger.warning("Using dummy data generator")
+            self.train_loader = None
+            self.val_loader = None
     
     def _setup_tensorboard(self) -> None:
         """Setup TensorBoard logging."""
@@ -1776,18 +1886,22 @@ class STDPTrainer:
                 # Record stats
                 result['homeostasis'] = threshold_mgr.get_stats()
             
-            # Find WTA winners
-            winners = self._find_wta_winners(post_spikes)
-            result['winners'] = winners
-            
+            # Get spike times from encoder output (new feature)
+            layer_spike_times = getattr(enc_output, 'layer_spike_times', None) or {}
+            post_spike_times = layer_spike_times.get(layer_name)
+
+            # Find WTA winners using spike times for proper first-spike competition
+            winners = self._find_wta_winners(post_spikes, post_spike_times)
+            result['winners'] = [(w[0], w[1], w[2]) for w in winners]  # Ensure tuple format
+
             # Apply STDP if we have winners
             if winners:
-                # Get pre-synaptic spikes
-                pre_spikes = self._get_pre_spikes(x, enc_output, layer_name)
-                
-                if pre_spikes is not None:
+                # Get pre-synaptic spike times
+                pre_spike_times = self._get_pre_spike_times(layer_spike_times, layer_name)
+
+                if pre_spike_times is not None and post_spike_times is not None:
                     result['n_updates'] = self._apply_stdp_update(
-                        layer_name, pre_spikes, post_spikes, winners
+                        layer_name, pre_spike_times, post_spike_times, winners
                     )
             
             # ============================================================
@@ -1826,194 +1940,232 @@ class STDPTrainer:
         """Get pre-synaptic spikes for a layer."""
         if layer_name == 'conv1':
             return input_spikes
-        
+
         layer_spikes = enc_output.layer_spikes if hasattr(enc_output, 'layer_spikes') else {}
-        
+
         if layer_name == 'conv2':
             # Pre = output of pool1 or conv1
             pre = layer_spikes.get('pool1', layer_spikes.get('conv1'))
         else:  # conv3
             # Pre = output of pool2 or conv2
             pre = layer_spikes.get('pool2', layer_spikes.get('conv2'))
-        
+
         if pre is not None and pre.dim() == 5:
             pre = pre.sum(dim=0)  # Sum over time
-        
+
         return pre
-    
-    def _find_wta_winners(self, spikes: torch.Tensor) -> List[int]:
+
+    def _get_pre_spike_times(
+        self,
+        layer_spike_times: Dict[str, torch.Tensor],
+        layer_name: str
+    ) -> Optional[torch.Tensor]:
         """
-        Find Winner-Take-All winners.
-        
+        Get pre-synaptic spike times for STDP.
+
+        Args:
+            layer_spike_times: Dict mapping layer name to spike times tensor.
+            layer_name: Name of the post-synaptic layer.
+
+        Returns:
+            Pre-synaptic spike times tensor (B, C, H, W), or None.
+        """
+        if layer_name == 'conv1':
+            # For conv1, pre-synaptic is input - we don't have spike times
+            # Return None to fall back to activity-based STDP
+            return None
+
+        if layer_name == 'conv2':
+            # Pre = output of pool1 (or conv1 if no pooling)
+            return layer_spike_times.get('pool1', layer_spike_times.get('conv1'))
+        else:  # conv3
+            # Pre = output of pool2 (or conv2 if no pooling)
+            return layer_spike_times.get('pool2', layer_spike_times.get('conv2'))
+    
+    def _find_wta_winners(
+        self,
+        spikes: torch.Tensor,
+        spike_times: Optional[torch.Tensor] = None
+    ) -> List[Tuple[int, int, int]]:
+        """
+        Find Winner-Take-All winners using first-spike competition.
+
+        Paper Reference (Kheradpisheh 2018):
+            "At each location, the first firing neuron inhibits all other
+            neurons in all feature maps at that location."
+
         Args:
             spikes: Spike tensor (B, C, H, W).
-        
+            spike_times: First spike times (B, C, H, W). -1 = never fired.
+
         Returns:
-            List of winning feature indices.
+            List of (feature_idx, y, x) tuples for winning neurons.
+            These are the neurons that fired first at each spatial location.
         """
         wta_cfg = self.config.wta
-        
-        if wta_cfg.mode == 'global':
-            # Global WTA: one winner per feature map (intra-map competition)
-            # Find features that have the most spikes
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))  # Sum over batch and space
-            else:
-                spike_counts = spikes.sum()
-            
-            # Get features that fired
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
-        
-        elif wta_cfg.mode == 'local':
-            # Local WTA: competition within spatial neighborhoods
-            # Simplified: just return all firing features
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))
-            else:
-                spike_counts = spikes.sum()
-            
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
-        
-        else:  # 'both'
-            # Combined: use global for now
-            if spikes.dim() == 4:
-                spike_counts = spikes.sum(dim=(0, 2, 3))
-            else:
-                spike_counts = spikes.sum()
-            
-            winners = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
-            return winners.tolist()
+
+        if spikes.dim() != 4:
+            # Fallback for non-4D tensors
+            spike_counts = spikes.sum() if spikes.dim() < 4 else spikes.sum(dim=(0, 2, 3))
+            winners_flat = torch.nonzero(spike_counts > 0, as_tuple=True)[0]
+            return [(int(w), 0, 0) for w in winners_flat.tolist()]
+
+        B, C, H, W = spikes.shape
+        winners = []
+
+        if spike_times is not None and wta_cfg.mode in ('global', 'both'):
+            # Proper first-spike WTA: find earliest spike at each location
+            # spike_times: (B, C, H, W), -1 means never fired
+
+            for b in range(B):
+                for y in range(H):
+                    for x in range(W):
+                        # Get spike times at this location across all features
+                        times_at_loc = spike_times[b, :, y, x]  # (C,)
+
+                        # Find features that fired (time >= 0)
+                        fired_mask = times_at_loc >= 0
+
+                        if fired_mask.any():
+                            # Get the earliest firing time
+                            # Set non-fired to infinity for argmin
+                            times_for_min = torch.where(
+                                fired_mask,
+                                times_at_loc,
+                                torch.tensor(float('inf'), device=times_at_loc.device)
+                            )
+                            winner_idx = int(times_for_min.argmin().item())
+
+                            # Only add if it actually fired
+                            if times_at_loc[winner_idx] >= 0:
+                                winners.append((winner_idx, y, x))
+
+        else:
+            # Fallback: use spike count (less accurate but works without timing)
+            for b in range(B):
+                for y in range(H):
+                    for x in range(W):
+                        spikes_at_loc = spikes[b, :, y, x]  # (C,)
+
+                        if spikes_at_loc.any():
+                            # Winner is feature with most spikes
+                            winner_idx = int(spikes_at_loc.argmax().item())
+                            if spikes_at_loc[winner_idx] > 0:
+                                winners.append((winner_idx, y, x))
+
+        return winners
     
     def _apply_stdp_update(
         self,
         layer_name: str,
-        pre_spikes: torch.Tensor,
-        post_spikes: torch.Tensor,
-        winners: List[int]
+        pre_spike_times: torch.Tensor,
+        post_spike_times: torch.Tensor,
+        winners: List[Tuple[int, int, int]]
     ) -> int:
         """
         Apply STDP weight update using proper spike timing.
-        
+
         Paper STDP Rule (Kheradpisheh 2018, Equation 3):
             Δw_ij = a⁺ · w_ij · (1 - w_ij)    if t_pre ≤ t_post  (LTP)
             Δw_ij = -a⁻ · w_ij · (1 - w_ij)   if t_pre > t_post  (LTD)
-        
-        Key insight: "The exact time difference does not affect the weight 
+
+        Key insight: "The exact time difference does not affect the weight
         change, but only its sign is considered."
-        
+
         Args:
             layer_name: Name of layer to update.
-            pre_spikes: Pre-synaptic spikes (B, C, H, W) or (T, B, C, H, W).
-            post_spikes: Post-synaptic spikes (B, C, H, W) or (T, B, C, H, W).
-            winners: List of winning feature map indices.
-        
+            pre_spike_times: Pre-synaptic first spike times (B, C, H, W).
+                            -1 means neuron never fired.
+            post_spike_times: Post-synaptic first spike times (B, C, H, W).
+                             -1 means neuron never fired.
+            winners: List of (feature_idx, y, x) tuples for winning neurons.
+
         Returns:
             Number of weights updated.
         """
+        if not winners:
+            return 0
+
         layer = getattr(self.model.encoder, layer_name)
         stdp_cfg = self.config.stdp
-        
+
         n_updates = 0
-        
+
         with torch.no_grad():
             weights = layer.conv.weight  # (out_ch, in_ch, kH, kW)
-            
-            # ================================================================
-            # Use STDPLearner if available (proper timing-based)
-            # ================================================================
-            if self.stdp_learner is not None:
-                try:
-                    from ..learning.stdp import get_first_spike_times
-                    
-                    # Get first spike times
-                    # Handle time dimension if present
-                    if pre_spikes.dim() == 5:  # (T, B, C, H, W)
-                        pre_times = get_first_spike_times(pre_spikes[:, 0])  # First batch
-                    elif pre_spikes.dim() == 4:  # (B, C, H, W) - treat as single timestep
-                        pre_times = get_first_spike_times(pre_spikes.unsqueeze(0)[:, 0])
-                    else:
-                        pre_times = get_first_spike_times(pre_spikes.unsqueeze(0))
-                    
-                    if post_spikes.dim() == 5:
-                        post_times = get_first_spike_times(post_spikes[:, 0])
-                    elif post_spikes.dim() == 4:
-                        post_times = get_first_spike_times(post_spikes.unsqueeze(0)[:, 0])
-                    else:
-                        post_times = get_first_spike_times(post_spikes.unsqueeze(0))
-                    
-                    # Create winner mask
-                    winner_mask = torch.zeros_like(post_times, dtype=torch.bool)
-                    for w_idx in winners:
-                        if w_idx < winner_mask.shape[0]:
-                            winner_mask[w_idx] = True
-                    
-                    # Compute batch update
-                    delta_w = self.stdp_learner.compute_batch_update(
-                        weights=weights,
-                        pre_spike_times=pre_times,
-                        post_spike_times=post_times,
-                        winner_mask=winner_mask.unsqueeze(0) if winner_mask.dim() == 3 else winner_mask
-                    )
-                    
-                    # Apply update
-                    weights.add_(delta_w)
-                    weights.clamp_(stdp_cfg.weight_min, stdp_cfg.weight_max)
-                    
-                    return int((delta_w != 0).sum().item())
-                    
-                except Exception as e:
-                    # Fall back to simplified STDP
-                    self.logger.debug(f"STDPLearner failed: {e}, using simplified STDP")
-            
-            # ================================================================
-            # Simplified STDP (fallback)
-            # Uses activity-based update instead of spike timing
-            # ================================================================
-            
-            # Compute pre-synaptic activity
-            if pre_spikes.dim() == 5:  # (T, B, C, H, W)
-                pre_active = (pre_spikes.sum(dim=(0, 1)) > 0).float()  # (C, H, W)
-            elif pre_spikes.dim() == 4:  # (B, C, H, W)
-                pre_active = (pre_spikes.sum(dim=0) > 0).float()  # (C, H, W)
+            kH, kW = weights.shape[2], weights.shape[3]
+            pad = kH // 2  # Assuming same padding
+
+            # Get input dimensions
+            if pre_spike_times.dim() == 4:
+                B, C_in, H_in, W_in = pre_spike_times.shape
             else:
-                pre_active = (pre_spikes > 0).float()
-            
-            # Average pre-synaptic activity per channel
-            pre_channel_active = pre_active.mean(dim=(1, 2))  # (C,)
-            
-            # Update each winning feature map
-            for winner_idx in winners:
-                if winner_idx >= weights.shape[0]:
+                self.logger.warning(f"Unexpected pre_spike_times dim: {pre_spike_times.dim()}")
+                return 0
+
+            # Process each winner
+            for winner_feat, winner_y, winner_x in winners:
+                if winner_feat >= weights.shape[0]:
                     continue
-                
-                w = weights[winner_idx]  # (in_ch, kH, kW)
-                
-                # ============================================================
-                # Multiplicative STDP with soft bounds
-                # Δw = α · w · (1 - w) · pre_activity
-                # ============================================================
-                soft_bound = w * (1.0 - w)
-                
-                # LTP for active pre-synaptic inputs
-                ltp = stdp_cfg.lr_plus * soft_bound * pre_channel_active.view(-1, 1, 1)
-                
-                # LTD for inactive pre-synaptic inputs (they "fire later" / don't contribute)
-                ltd = stdp_cfg.lr_minus * soft_bound * (1 - pre_channel_active.view(-1, 1, 1))
-                
-                # Combined update
-                delta_w = ltp - ltd
-                
-                # Apply update with clamping
-                weights[winner_idx] = torch.clamp(
-                    w + delta_w,
-                    stdp_cfg.weight_min,
-                    stdp_cfg.weight_max
-                )
-                
-                n_updates += w.numel()
-        
+
+                # Get post-synaptic spike time for this winner
+                # Use first batch element
+                t_post = post_spike_times[0, winner_feat, winner_y, winner_x].item()
+
+                if t_post < 0:
+                    # Winner didn't actually fire (shouldn't happen)
+                    continue
+
+                # Get the receptive field in the pre-synaptic layer
+                # For stride=1, same padding: output (y,x) corresponds to
+                # input centered at (y,x) with kernel size kH x kW
+                y_start = max(0, winner_y - pad)
+                y_end = min(H_in, winner_y + pad + 1)
+                x_start = max(0, winner_x - pad)
+                x_end = min(W_in, winner_x + pad + 1)
+
+                # Extract pre-synaptic spike times in receptive field
+                # Shape: (C_in, rf_h, rf_w)
+                pre_rf_times = pre_spike_times[0, :, y_start:y_end, x_start:x_end]
+
+                # Compute weight indices in kernel
+                ky_start = max(0, pad - winner_y)
+                ky_end = kH - max(0, winner_y + pad + 1 - H_in)
+                kx_start = max(0, pad - winner_x)
+                kx_end = kW - max(0, winner_x + pad + 1 - W_in)
+
+                # Get weights for this output feature
+                w = weights[winner_feat]  # (in_ch, kH, kW)
+
+                # Apply STDP for each pre-synaptic connection
+                for c in range(C_in):
+                    for ky, ry in zip(range(ky_start, ky_end), range(pre_rf_times.shape[1])):
+                        for kx, rx in zip(range(kx_start, kx_end), range(pre_rf_times.shape[2])):
+                            t_pre = pre_rf_times[c, ry, rx].item()
+
+                            # Get current weight
+                            w_val = w[c, ky, kx].item()
+
+                            # Soft bounds factor
+                            soft_bound = w_val * (1.0 - w_val)
+
+                            if t_pre >= 0:  # Pre-synaptic neuron fired
+                                if t_pre <= t_post:
+                                    # LTP: pre fires before or at same time as post
+                                    delta = stdp_cfg.lr_plus * soft_bound
+                                else:
+                                    # LTD: pre fires after post
+                                    delta = -stdp_cfg.lr_minus * soft_bound
+                            else:
+                                # Pre-synaptic neuron never fired -> LTD
+                                delta = -stdp_cfg.lr_minus * soft_bound
+
+                            # Update weight
+                            new_w = w_val + delta
+                            new_w = max(stdp_cfg.weight_min, min(stdp_cfg.weight_max, new_w))
+                            w[c, ky, kx] = new_w
+                            n_updates += 1
+
         return n_updates
     
     # =========================================================================
