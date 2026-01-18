@@ -273,6 +273,7 @@ class DataParams:
     """
     dataset: str = "ebssa"       # Dataset name
     data_root: str = "./data"    # Data directory
+    sensor: str = "all"          # Sensor type: "DAVIS", "ATIS", or "all"
     batch_size: int = 1          # Batch size (typically 1 for online STDP)
     num_workers: int = 4         # DataLoader workers
     pin_memory: bool = True      # Pin memory for faster GPU transfer
@@ -1418,6 +1419,7 @@ class STDPTrainer:
                     train_dataset = EBSSADataset(
                         root=data_cfg.data_root,
                         split="train",
+                        sensor=data_cfg.sensor,
                         n_timesteps=data_cfg.n_timesteps,
                         height=data_cfg.input_height,
                         width=data_cfg.input_width,
@@ -1427,6 +1429,7 @@ class STDPTrainer:
                     val_dataset = EBSSADataset(
                         root=data_cfg.data_root,
                         split="val",
+                        sensor=data_cfg.sensor,
                         n_timesteps=data_cfg.n_timesteps,
                         height=data_cfg.input_height,
                         width=data_cfg.input_width,

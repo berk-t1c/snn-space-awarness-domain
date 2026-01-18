@@ -24,7 +24,7 @@ device: "cuda"  # "cuda", "cuda:0", "cpu"
 # -----------------------------------------------------------------------------
 # Training Duration
 # -----------------------------------------------------------------------------
-max_epochs: 10
+max_epochs: 50              # More epochs for STDP convergence
 max_samples_per_epoch: null  # null = use full dataset
 
 # Layer-wise training control
@@ -97,6 +97,7 @@ convergence:
 data:
   dataset: "ebssa"          # Dataset name
   data_root: "../ebssa-data-utah/ebssa"  # Data directory (contains 'Labelled Data' folder)
+  sensor: "all"             # Use ALL sensors (ATIS + DAVIS) for more data
   batch_size: 1             # Batch size (typically 1 for online STDP)
   num_workers: 4            # DataLoader workers
   pin_memory: true          # Pin memory for faster GPU transfer
