@@ -678,6 +678,10 @@ def evaluate_objects(
                     p2_idx = pool_indices.pool2_indices[b]
                     logger.info(f"    Pool1 indices shape: {p1_idx.shape}, unique values: {p1_idx.unique().shape[0]}")
                     logger.info(f"    Pool2 indices shape: {p2_idx.shape}, unique values: {p2_idx.unique().shape[0]}")
+                    logger.info(f"    Pool1 output_size: {pool_indices.pool1_output_size}")
+                    logger.info(f"    Pool2 output_size: {pool_indices.pool2_output_size}")
+                    # Check label shape
+                    logger.info(f"    Label shape: {label_2d.shape}")
 
                 # Use HULK to process ALL spikes to instances
                 try:
@@ -690,6 +694,16 @@ def evaluate_objects(
                         n_timesteps=n_timesteps,
                         threshold=0.5
                     )
+
+                    # Debug: check first instance's pixel mask
+                    if batch_idx < 3 and instances:
+                        inst = instances[0]
+                        if inst.mask is not None and inst.mask.sum() > 0:
+                            mask_coords = torch.nonzero(inst.mask)
+                            mask_y = mask_coords[:, 0].float().mean().item()
+                            mask_x = mask_coords[:, 1].float().mean().item()
+                            logger.info(f"    First HULK instance mask center: ({mask_x:.1f}, {mask_y:.1f})")
+                            logger.info(f"    Mask shape: {inst.mask.shape}, pixels: {inst.mask.sum().item()}")
 
                     # Group instances into objects using SMASH
                     objects = group_instances_to_objects(instances, smash_threshold=0.1)
