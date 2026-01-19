@@ -502,8 +502,9 @@ class SpikingEncoderLayer(nn.Module):
             bias=False
         )
         
-        # Initialize weights for STDP compatibility (0.8 ± 0.01)
-        nn.init.normal_(self.conv.weight, mean=0.8, std=0.01)
+        # Initialize weights for STDP compatibility (0.8 ± 0.05)
+        # Per Kheradpisheh 2018, std=0.05 provides sufficient diversity for feature learning
+        nn.init.normal_(self.conv.weight, mean=0.8, std=0.05)
         self.conv.weight.data.clamp_(0, 1)
         
         # Spiking neuron
