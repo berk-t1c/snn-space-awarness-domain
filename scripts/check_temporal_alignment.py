@@ -23,8 +23,20 @@ def main():
     print("=" * 70)
 
     # Create dataset with multiple windows per recording
+    # Use absolute path or path relative to repo root
+    data_root = Path(__file__).parent.parent.parent / "ebssa-data-utah" / "ebssa"
+    if not data_root.exists():
+        # Try alternative paths
+        for alt in ["../ebssa-data-utah/ebssa", "../../ebssa-data-utah/ebssa", "/home/user/ebssa-data-utah/ebssa"]:
+            alt_path = Path(alt)
+            if alt_path.exists():
+                data_root = alt_path
+                break
+
+    print(f"Data root: {data_root} (exists: {data_root.exists()})")
+
     dataset = EBSSADataset(
-        root="../ebssa-data-utah/ebssa",
+        root=str(data_root),
         split="all",
         sensor="all",
         n_timesteps=20,
