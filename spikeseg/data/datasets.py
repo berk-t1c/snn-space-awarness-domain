@@ -284,8 +284,9 @@ def events_to_voxel_grid(
     if events.width != width or events.height != height:
         scale_x = (width - 1) / max(events.width - 1, 1)
         scale_y = (height - 1) / max(events.height - 1, 1)
-        x = (events.x * scale_x).astype(np.int32)
-        y = (events.y * scale_y).astype(np.int32)
+        # Use round() instead of truncation to avoid 1-2 pixel offset
+        x = np.round(events.x * scale_x).astype(np.int32)
+        y = np.round(events.y * scale_y).astype(np.int32)
     else:
         x = events.x.astype(np.int32)
         y = events.y.astype(np.int32)
@@ -409,8 +410,9 @@ def events_to_time_surface(
     if events.width != width or events.height != height:
         scale_x = (width - 1) / max(events.width - 1, 1)
         scale_y = (height - 1) / max(events.height - 1, 1)
-        x = (events.x * scale_x).astype(np.int32)
-        y = (events.y * scale_y).astype(np.int32)
+        # Use round() instead of truncation to avoid 1-2 pixel offset
+        x = np.round(events.x * scale_x).astype(np.int32)
+        y = np.round(events.y * scale_y).astype(np.int32)
     else:
         x = events.x.astype(np.int32)
         y = events.y.astype(np.int32)

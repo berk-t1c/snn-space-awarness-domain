@@ -702,18 +702,24 @@ def evaluate_objects(
                 if len(spike_locs) > 0:
                     # Scale from 32x32 classification map to 128x128 pixel space
                     scale_factor = 4  # Two 2x2 poolings
-                    det_centroids_simple = []
-                    # Group nearby spikes into single detections
-                    spike_yx = spike_locs[:, 1:].float() * scale_factor  # (N, 2) for [y, x]
-                    # Simple clustering: unique positions after rounding to grid
-                    unique_positions = set()
-                    for i in range(len(spike_yx)):
-                        y, x = spike_yx[i].tolist()
-                        # Round to nearest 4 pixels for grouping
-                        grid_y = int(y // 8) * 8 + 4
-                        grid_x = int(x // 8) * 8 + 4
-                        unique_positions.add((grid_x, grid_y))  # (x, y) format
-                    det_centroids = list(unique_positions)
+
+                    # Use connected components for proper clustering (not naive grid)
+                    # Create binary mask from spike locations in classification space
+                    spike_mask = (class_spikes.sum(dim=0).sum(dim=0) > 0).cpu().numpy()  # (32, 32)
+
+                    # Find connected components
+                    labeled_array, num_features = ndimage.label(spike_mask)
+
+                    # Extract centroid for each connected component
+                    det_centroids = []
+                    for i in range(1, num_features + 1):
+                        coords = np.where(labeled_array == i)
+                        if len(coords[0]) > 0:
+                            # Centroid in classification space, then scale to pixel space
+                            cy = coords[0].mean() * scale_factor
+                            cx = coords[1].mean() * scale_factor
+                            det_centroids.append((cx, cy))  # (x, y) format
+
                     total_detections += len(det_centroids)
                 else:
                     det_centroids = []
