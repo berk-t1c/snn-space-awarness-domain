@@ -1078,6 +1078,10 @@ class EBSSADataset(EventDataset):
 
         Uses the sample index to determine which recording and which
         time window to extract events from.
+
+        IMPORTANT: For EBSSA data, events are filtered to the object's time
+        range (when the satellite is tracked) rather than using the full
+        recording. This ensures events and labels are temporally aligned.
         """
         # Map sample index to recording and window
         rec_idx, win_idx = self._sample_map[index]
@@ -1102,15 +1106,10 @@ class EBSSADataset(EventDataset):
                 width=self._sensor_width
             )
 
-        # Calculate original window time boundaries BEFORE extraction
-        # (needed for label timestamp filtering)
-        window_time_range = self._get_window_time_range(all_events, win_idx)
-
-        # Apply sliding window to extract subset of events
-        events = self._extract_window(all_events, win_idx)
-
-        # Load labels
+        # Load labels FIRST to get object time range
         label = None
+        obj_time_range = None
+
         if rec['label_path'] is not None:
             try:
                 label = load_labels_mat(rec['label_path'])
@@ -1127,6 +1126,39 @@ class EBSSADataset(EventDataset):
             except Exception:
                 pass
 
+        # Extract object time range from labels for event filtering
+        if label is not None and isinstance(label, dict) and 'Obj' in label:
+            obj_time_range = self._get_object_time_range(label)
+
+        # Filter events to object time range if available
+        # This is CRITICAL for EBSSA - recordings are 60-90 seconds but
+        # objects are only tracked for 0.5-2 seconds
+        if obj_time_range is not None and len(all_events.t) > 0:
+            t_min, t_max = obj_time_range
+            # Add small margin (10% of duration) around object time
+            duration = t_max - t_min
+            margin = duration * 0.1
+            t_min -= margin
+            t_max += margin
+
+            # Filter events to object time window
+            time_mask = (all_events.t >= t_min) & (all_events.t <= t_max)
+            events = EventData(
+                x=all_events.x[time_mask],
+                y=all_events.y[time_mask],
+                p=all_events.p[time_mask],
+                t=all_events.t[time_mask],
+                height=all_events.height,
+                width=all_events.width
+            )
+            window_time_range = (t_min, t_max)
+        else:
+            # Calculate original window time boundaries BEFORE extraction
+            # (needed for label timestamp filtering)
+            window_time_range = self._get_window_time_range(all_events, win_idx)
+            # Apply sliding window to extract subset of events
+            events = self._extract_window(all_events, win_idx)
+
         # For segmentation, create binary mask
         # (placeholder - actual format depends on label file structure)
         if label is None:
@@ -1137,6 +1169,57 @@ class EBSSADataset(EventDataset):
             label = self._labels_to_mask(label, events, window_time_range)
 
         return events, label
+
+    def _get_object_time_range(
+        self, labels: Dict[str, Any]
+    ) -> Optional[Tuple[float, float]]:
+        """Extract the time range when the object is tracked.
+
+        Returns the (t_min, t_max) timestamps from the object trajectory,
+        or None if timestamps aren't available.
+        """
+        if 'Obj' not in labels:
+            return None
+
+        obj = labels['Obj']
+
+        # Helper to unwrap nested 0-d object arrays from MATLAB
+        def unwrap_field(field):
+            if field is None:
+                return None
+            if hasattr(field, 'shape') and field.shape == () and hasattr(field, 'dtype') and field.dtype == object:
+                inner = field.item()
+                return unwrap_field(inner)
+            if hasattr(field, 'flatten'):
+                return field.flatten()
+            return field
+
+        # Extract timestamps
+        obj_ts = None
+        if hasattr(obj, 'dtype') and obj.dtype.names and 'ts' in obj.dtype.names:
+            obj_ts = unwrap_field(obj['ts'])
+        elif isinstance(obj, tuple) and len(obj) > 3:
+            obj_ts = obj[3]
+
+        if obj_ts is None:
+            return None
+
+        try:
+            obj_ts_flat = np.asarray(obj_ts).flatten()
+            if obj_ts_flat.dtype == object:
+                obj_ts_flat = np.array([
+                    float(x) if np.isscalar(x) else float(np.asarray(x).flatten()[0])
+                    for x in obj_ts_flat
+                ])
+            else:
+                obj_ts_flat = obj_ts_flat.astype(float)
+
+            if len(obj_ts_flat) > 0:
+                return (float(obj_ts_flat.min()), float(obj_ts_flat.max()))
+        except (ValueError, TypeError, IndexError):
+            pass
+
+        return None
 
     def _get_window_time_range(
         self, events: EventData, window_idx: int
