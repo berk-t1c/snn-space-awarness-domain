@@ -86,7 +86,7 @@ homeostasis:
 # -----------------------------------------------------------------------------
 convergence:
   min_wins_per_neuron: 2    # Min WTA wins for neuron to be "converged" (very low for small data)
-  target_ratio: 0.50        # Target fraction of converged neurons (50% realistic for 67 samples)
+  target_ratio: 0.40        # Target fraction of converged neurons (50% realistic for 67 samples)
   patience: 20              # Epochs without improvement before stopping (very patient)
   delta_threshold: 0.0001   # Weight change threshold for convergence
   check_interval: 100       # Check convergence every N samples

@@ -629,7 +629,7 @@ class LayerStats:
     # Spatial wins tracking: maps (channel, y, x) -> win count
     # Used for spatial cooldown to prevent domination
     spatial_wins: Dict[Tuple[int, int, int], int] = field(default_factory=dict)
-    spatial_cooldown_threshold: int = 5  # Max wins before location is cooled down
+    spatial_cooldown_threshold: int = 1000  # Effectively disabled - was too aggressive at 5
 
     def __post_init__(self):
         if len(self.wins) == 0:
