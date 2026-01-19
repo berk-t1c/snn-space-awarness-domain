@@ -132,19 +132,27 @@ def extract_detection_centroids(objects: List[Object]) -> List[Tuple[float, floa
     """
     centroids = []
     for obj in objects:
-        if obj.bbox is not None:
+        if obj.combined_bbox is not None:
             # Use bbox center as centroid
-            cx = (obj.bbox.x1 + obj.bbox.x2) / 2
-            cy = (obj.bbox.y1 + obj.bbox.y2) / 2
+            cx = (obj.combined_bbox.x1 + obj.combined_bbox.x2) / 2
+            cy = (obj.combined_bbox.y1 + obj.combined_bbox.y2) / 2
             centroids.append((cx, cy))
-        elif obj.instances and obj.instances[0].mask is not None:
-            # Fall back to mask centroid
-            mask = obj.instances[0].mask
-            if mask.sum() > 0:
-                coords = torch.where(mask > 0)
-                cy = coords[0].float().mean().item()
-                cx = coords[1].float().mean().item()
-                centroids.append((cx, cy))
+        elif obj.instances:
+            # Fall back to instance mask/bbox centroid
+            for inst in obj.instances:
+                if hasattr(inst, 'bbox') and inst.bbox is not None:
+                    cx = (inst.bbox.x1 + inst.bbox.x2) / 2
+                    cy = (inst.bbox.y1 + inst.bbox.y2) / 2
+                    centroids.append((cx, cy))
+                    break
+                elif hasattr(inst, 'mask') and inst.mask is not None:
+                    mask = inst.mask
+                    if mask.sum() > 0:
+                        coords = torch.where(mask > 0)
+                        cy = coords[0].float().mean().item()
+                        cx = coords[1].float().mean().item()
+                        centroids.append((cx, cy))
+                        break
 
     return centroids
 
