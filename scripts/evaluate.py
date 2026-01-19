@@ -695,37 +695,31 @@ def evaluate_objects(
                     # Check label shape
                     logger.info(f"    Label shape: {label_2d.shape}")
 
-                # Use HULK to process ALL spikes to instances
-                try:
-                    instances = hulk_decoder.process_to_instances(
-                        classification_spikes=class_spikes,
-                        pool1_indices=pool_indices.pool1_indices[b:b+1],
-                        pool2_indices=pool_indices.pool2_indices[b:b+1],
-                        pool1_output_size=pool_indices.pool1_output_size,
-                        pool2_output_size=pool_indices.pool2_output_size,
-                        n_timesteps=n_timesteps,
-                        threshold=0.5
-                    )
+                # WORKAROUND: HULK unpooling is broken because pooling indices are only
+                # from the last timestep, but spikes occur across all timesteps.
+                # Use classification spike locations directly (scaled by 4) instead.
+                spike_locs = torch.nonzero(class_spikes.sum(dim=0))  # (N, 3) for [class, y, x]
+                if len(spike_locs) > 0:
+                    # Scale from 32x32 classification map to 128x128 pixel space
+                    scale_factor = 4  # Two 2x2 poolings
+                    det_centroids_simple = []
+                    # Group nearby spikes into single detections
+                    spike_yx = spike_locs[:, 1:].float() * scale_factor  # (N, 2) for [y, x]
+                    # Simple clustering: unique positions after rounding to grid
+                    unique_positions = set()
+                    for i in range(len(spike_yx)):
+                        y, x = spike_yx[i].tolist()
+                        # Round to nearest 4 pixels for grouping
+                        grid_y = int(y // 8) * 8 + 4
+                        grid_x = int(x // 8) * 8 + 4
+                        unique_positions.add((grid_x, grid_y))  # (x, y) format
+                    det_centroids = list(unique_positions)
+                    total_detections += len(det_centroids)
+                else:
+                    det_centroids = []
 
-                    # Debug: check first instance's pixel mask
-                    if batch_idx < 3 and instances:
-                        inst = instances[0]
-                        if inst.mask is not None and inst.mask.sum() > 0:
-                            mask_coords = torch.nonzero(inst.mask)
-                            mask_y = mask_coords[:, 0].float().mean().item()
-                            mask_x = mask_coords[:, 1].float().mean().item()
-                            logger.info(f"    First HULK instance mask center: ({mask_x:.1f}, {mask_y:.1f})")
-                            logger.info(f"    Mask shape: {inst.mask.shape}, pixels: {inst.mask.sum().item()}")
-
-                    # Group instances into objects using SMASH
-                    objects = group_instances_to_objects(instances, smash_threshold=0.1)
-                    total_detections += len(objects)
-
-                    # Extract detection centroids
-                    det_centroids = extract_detection_centroids(objects)
-
-                    # Compute object-level metrics
-                    metrics = compute_object_metrics(det_centroids, gt_centroids, spatial_tolerance)
+                # Compute object-level metrics
+                metrics = compute_object_metrics(det_centroids, gt_centroids, spatial_tolerance)
                     total_tp += metrics['tp']
                     total_fp += metrics['fp']
                     total_fn += metrics['fn']
