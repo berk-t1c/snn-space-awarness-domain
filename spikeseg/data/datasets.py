@@ -1151,8 +1151,9 @@ class EBSSADataset(EventDataset):
             # Stars are much brighter than satellites, so we need spatial filtering
             if obj_trajectory is not None:
                 obj_x, obj_y = obj_trajectory
-                # Create spatial mask: events within 30 pixels of any trajectory point
-                spatial_radius = 30
+                # Create spatial mask: events within 15 pixels of any trajectory point
+                # (Satellites generate events in a small area; 15px ≈ 2x typical streak width)
+                spatial_radius = 15
                 spatial_mask = np.zeros(len(all_events.t), dtype=bool)
                 for ox, oy in zip(obj_x, obj_y):
                     dist_sq = (all_events.x - ox)**2 + (all_events.y - oy)**2
