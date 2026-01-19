@@ -976,7 +976,7 @@ def main():
         width=128,
         normalize=True,
         use_labels=True,
-        windows_per_recording=50,  # Match training config - extract proper ~1s windows
+        windows_per_recording=1,  # Use object-time filtering (same as training)
     )
 
     logger.info(f"Dataset: {len(dataset)} samples")
@@ -985,7 +985,7 @@ def main():
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=0,  # Avoid OOM with spatial filtering
         pin_memory=True
     )
 
