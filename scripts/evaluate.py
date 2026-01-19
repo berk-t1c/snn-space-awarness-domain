@@ -133,16 +133,16 @@ def extract_detection_centroids(objects: List[Object]) -> List[Tuple[float, floa
     centroids = []
     for obj in objects:
         if obj.combined_bbox is not None:
-            # Use bbox center as centroid
-            cx = (obj.combined_bbox.x1 + obj.combined_bbox.x2) / 2
-            cy = (obj.combined_bbox.y1 + obj.combined_bbox.y2) / 2
+            # Use bbox center as centroid (BoundingBox uses x_min/x_max/y_min/y_max)
+            cx = (obj.combined_bbox.x_min + obj.combined_bbox.x_max) / 2
+            cy = (obj.combined_bbox.y_min + obj.combined_bbox.y_max) / 2
             centroids.append((cx, cy))
         elif obj.instances:
             # Fall back to instance mask/bbox centroid
             for inst in obj.instances:
                 if hasattr(inst, 'bbox') and inst.bbox is not None:
-                    cx = (inst.bbox.x1 + inst.bbox.x2) / 2
-                    cy = (inst.bbox.y1 + inst.bbox.y2) / 2
+                    cx = (inst.bbox.x_min + inst.bbox.x_max) / 2
+                    cy = (inst.bbox.y_min + inst.bbox.y_max) / 2
                     centroids.append((cx, cy))
                     break
                 elif hasattr(inst, 'mask') and inst.mask is not None:
