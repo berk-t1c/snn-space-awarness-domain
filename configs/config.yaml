@@ -100,7 +100,7 @@ data:
   sensor: "all"             # Use ALL sensors (ATIS + DAVIS) for more data
   include_unlabelled: false  # Disabled - unlabelled data has incompatible format
   batch_size: 1             # Batch size (typically 1 for online STDP)
-  num_workers: 4            # DataLoader workers
+  num_workers: 0            # Single-threaded to avoid OOM with spatial filtering
   pin_memory: true          # Pin memory for faster GPU transfer
   
   # Event/spike parameters (SpikeSEG: 20 timesteps for events)
@@ -116,10 +116,10 @@ data:
   shuffle_val: false        # Shuffle validation data
   train_ratio: 1.0          # Use ALL data for training (STDP is unsupervised)
   
-  # Sliding window sampling - extract multiple samples per recording
-  # 84 recordings × 50 windows = 4200 training samples
-  windows_per_recording: 50  # Number of temporal windows per recording
-  window_overlap: 0.5        # 50% overlap between consecutive windows
+  # Sliding window sampling - disabled since we filter to object time window
+  # Object-time filtering extracts only the ~0.5-2s when satellite is tracked
+  windows_per_recording: 1   # One sample per recording (object time window)
+  window_overlap: 0.0        # Not used with windows_per_recording=1
   
   # Data augmentation (safe options - no cropping to preserve edge satellites)
   augmentation:
