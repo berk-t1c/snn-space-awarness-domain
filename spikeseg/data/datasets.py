@@ -1154,12 +1154,24 @@ class EBSSADataset(EventDataset):
                 # Create spatial mask: events within 15 pixels of any trajectory point
                 # (Satellites generate events in a small area; 15px ≈ 2x typical streak width)
                 spatial_radius = 15
-                spatial_mask = np.zeros(len(all_events.t), dtype=bool)
-                for ox, oy in zip(obj_x, obj_y):
-                    dist_sq = (all_events.x - ox)**2 + (all_events.y - oy)**2
-                    spatial_mask |= (dist_sq <= spatial_radius**2)
-                # Combine temporal and spatial masks
-                combined_mask = time_mask & spatial_mask
+
+                # Vectorized distance computation: (n_events, n_traj)
+                # Use broadcasting: events[:, newaxis] - trajectory[newaxis, :]
+                evt_x = all_events.x[time_mask]  # Filter by time first (faster)
+                evt_y = all_events.y[time_mask]
+
+                # Compute min distance to any trajectory point for each event
+                dx = evt_x[:, np.newaxis] - obj_x[np.newaxis, :]
+                dy = evt_y[:, np.newaxis] - obj_y[np.newaxis, :]
+                dist_sq = dx**2 + dy**2
+
+                # Event is valid if within radius of ANY trajectory point
+                spatial_mask_filtered = np.any(dist_sq <= spatial_radius**2, axis=1)
+
+                # Apply spatial mask to time-filtered indices
+                time_indices = np.where(time_mask)[0]
+                combined_mask = np.zeros(len(all_events.t), dtype=bool)
+                combined_mask[time_indices[spatial_mask_filtered]] = True
             else:
                 combined_mask = time_mask
 
