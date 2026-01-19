@@ -267,7 +267,7 @@ class STDPConfig:
                 lr_plus=0.04,
                 lr_minus=0.03,
                 weight_init_mean=0.8,
-                weight_init_std=0.01,
+                weight_init_std=0.05,  # Kheradpisheh 2018: 0.05 for weight diversity
                 convergence_threshold=0.01,
                 variant=STDPVariant.MULTIPLICATIVE
             ),
