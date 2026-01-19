@@ -720,28 +720,24 @@ def evaluate_objects(
 
                 # Compute object-level metrics
                 metrics = compute_object_metrics(det_centroids, gt_centroids, spatial_tolerance)
-                    total_tp += metrics['tp']
-                    total_fp += metrics['fp']
-                    total_fn += metrics['fn']
+                total_tp += metrics['tp']
+                total_fp += metrics['fp']
+                total_fn += metrics['fn']
 
-                    if batch_idx < 3:
-                        logger.info(f"  Sample {batch_idx}: detections={len(objects)}, "
-                                   f"gt_objects={len(gt_centroids)}, tp={metrics['tp']}")
-                        # Debug: show actual centroid coordinates
-                        if det_centroids and gt_centroids:
-                            logger.info(f"    GT centroids: {gt_centroids[:3]}")
-                            logger.info(f"    Det centroids (first 5): {det_centroids[:5]}")
-                            # Find minimum distance
-                            min_dist = float('inf')
-                            for dx, dy in det_centroids:
-                                for gx, gy in gt_centroids:
-                                    dist = np.sqrt((dx - gx)**2 + (dy - gy)**2)
-                                    min_dist = min(min_dist, dist)
-                            logger.info(f"    Min distance between any det and GT: {min_dist:.1f} pixels")
-
-                except Exception as e:
-                    logger.warning(f"HULK failed for batch {b}: {e}")
-                    total_fn += len(gt_centroids)
+                if batch_idx < 3:
+                    logger.info(f"  Sample {batch_idx}: detections={len(det_centroids)}, "
+                               f"gt_objects={len(gt_centroids)}, tp={metrics['tp']}")
+                    # Debug: show actual centroid coordinates
+                    if det_centroids and gt_centroids:
+                        logger.info(f"    GT centroids: {gt_centroids[:3]}")
+                        logger.info(f"    Det centroids (first 5): {det_centroids[:5]}")
+                        # Find minimum distance
+                        min_dist = float('inf')
+                        for dx, dy in det_centroids:
+                            for gx, gy in gt_centroids:
+                                dist = np.sqrt((dx - gx)**2 + (dy - gy)**2)
+                                min_dist = min(min_dist, dist)
+                        logger.info(f"    Min distance between any det and GT: {min_dist:.1f} pixels")
 
         n_samples += batch_size
 
