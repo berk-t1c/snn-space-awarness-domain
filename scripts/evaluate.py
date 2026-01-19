@@ -432,11 +432,14 @@ def load_model(
 
     model.load_state_dict(filtered_state_dict, strict=False)
 
-    # Fix: Override leak values that get loaded from checkpoint
-    # Training uses leak for STDP stability, but inference works better without it
-    model.conv1.neuron.leak.data.fill_(0.0)
-    model.conv2.neuron.leak.data.fill_(0.0)
-    model.conv3.neuron.leak.data.fill_(0.0)
+    # IGARSS 2023 paper leak values (percentage of threshold):
+    # - Layer 1: 90% leak (short-term memory for fast objects)
+    # - Layer 2: 10% leak (long-term memory for slow objects)
+    # - Layer 3: 0% leak (classification)
+    # These temporal dynamics are CRITICAL for detecting both fast and slow objects
+    model.conv1.neuron.leak.data.fill_(0.09)  # 90% of threshold=0.1
+    model.conv2.neuron.leak.data.fill_(0.01)  # 10% of threshold=0.1
+    model.conv3.neuron.leak.data.fill_(0.0)   # No leak for classification
 
     model.to(device)
     model.eval()
