@@ -25,7 +25,7 @@ device: "cuda"  # "cuda", "cuda:0", "cpu"
 # Training Duration
 # -----------------------------------------------------------------------------
 max_epochs: 50              # More epochs for STDP convergence
-max_samples_per_epoch: 5    # Limit samples for testing (set to null for full training)
+max_samples_per_epoch: null  # null = use full dataset (67 samples with sensor=all)
 
 # Layer-wise training control
 train_conv1: false  # Conv1 uses fixed DoG/Gabor filters (no STDP)
