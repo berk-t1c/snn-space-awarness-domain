@@ -1150,23 +1150,26 @@ class EBSSADataset(EventDataset):
             # ALSO filter spatially around object trajectory to suppress stars
             # Stars are much brighter than satellites, so we need spatial filtering
             if obj_trajectory is not None:
+                from scipy.spatial import cKDTree
+
                 obj_x, obj_y = obj_trajectory
-                # Create spatial mask: events within 15 pixels of any trajectory point
-                # (Satellites generate events in a small area; 15px ≈ 2x typical streak width)
                 spatial_radius = 15
 
-                # Vectorized distance computation: (n_events, n_traj)
-                # Use broadcasting: events[:, newaxis] - trajectory[newaxis, :]
-                evt_x = all_events.x[time_mask]  # Filter by time first (faster)
+                # Filter by time first to reduce data size
+                evt_x = all_events.x[time_mask]
                 evt_y = all_events.y[time_mask]
 
-                # Compute min distance to any trajectory point for each event
-                dx = evt_x[:, np.newaxis] - obj_x[np.newaxis, :]
-                dy = evt_y[:, np.newaxis] - obj_y[np.newaxis, :]
-                dist_sq = dx**2 + dy**2
+                # Use KD-tree for efficient spatial queries: O(n log m) instead of O(n*m)
+                # Build tree from trajectory points (small: ~70 points)
+                traj_points = np.column_stack([obj_x, obj_y])
+                tree = cKDTree(traj_points)
 
-                # Event is valid if within radius of ANY trajectory point
-                spatial_mask_filtered = np.any(dist_sq <= spatial_radius**2, axis=1)
+                # Query nearest trajectory point for each event
+                evt_points = np.column_stack([evt_x, evt_y])
+                distances, _ = tree.query(evt_points, k=1)
+
+                # Keep events within radius of any trajectory point
+                spatial_mask_filtered = distances <= spatial_radius
 
                 # Apply spatial mask to time-filtered indices
                 time_indices = np.where(time_mask)[0]
