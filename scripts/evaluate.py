@@ -276,11 +276,14 @@ def predict_sample_hulk(
             if class_spikes.sum() == 0:
                 continue
 
-            # Debug: Count spikes per class
-            class0_spikes = class_spikes[:, 0, :, :].sum().item()
-            class1_spikes = class_spikes[:, 1, :, :].sum().item()
+            # Debug: Count spikes per class and check overlap
+            class0_mask = (class_spikes[:, 0, :, :].sum(dim=0) > 0)  # (H, W)
+            class1_mask = (class_spikes[:, 1, :, :].sum(dim=0) > 0)  # (H, W)
+            class0_spikes = class0_mask.sum().item()
+            class1_spikes = class1_mask.sum().item()
+            overlap = (class0_mask & class1_mask).sum().item()
             if b == 0:  # Only log for first batch item
-                logger.debug(f"Spikes: class0={class0_spikes:.0f}, class1={class1_spikes:.0f}")
+                logger.debug(f"Spikes: class0={class0_spikes:.0f}, class1={class1_spikes:.0f}, overlap={overlap:.0f}")
 
             # CRITICAL FIX: Only process satellite class spikes
             # HULK processes all classes by default, but we only want satellite detections
