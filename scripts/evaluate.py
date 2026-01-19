@@ -976,7 +976,7 @@ def main():
         width=128,
         normalize=True,
         use_labels=True,
-        windows_per_recording=1,  # Single window for evaluation
+        windows_per_recording=50,  # Match training config - extract proper ~1s windows
     )
 
     logger.info(f"Dataset: {len(dataset)} samples")
