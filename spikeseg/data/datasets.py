@@ -279,9 +279,19 @@ def events_to_voxel_grid(
     t_idx = t_norm.astype(np.int32)
     t_idx = np.clip(t_idx, 0, n_timesteps - 1)
     
-    # Clip spatial coordinates
-    x = np.clip(events.x, 0, width - 1).astype(np.int32)
-    y = np.clip(events.y, 0, height - 1).astype(np.int32)
+    # Scale spatial coordinates if output size differs from sensor size
+    # (Previously just clipped, causing misalignment with scaled labels)
+    if events.width != width or events.height != height:
+        scale_x = (width - 1) / max(events.width - 1, 1)
+        scale_y = (height - 1) / max(events.height - 1, 1)
+        x = (events.x * scale_x).astype(np.int32)
+        y = (events.y * scale_y).astype(np.int32)
+    else:
+        x = events.x.astype(np.int32)
+        y = events.y.astype(np.int32)
+    # Clip to valid range (safety)
+    x = np.clip(x, 0, width - 1)
+    y = np.clip(y, 0, height - 1)
     
     # Determine polarity channel
     p = events.p
@@ -394,9 +404,18 @@ def events_to_time_surface(
     
     # Exponential decay from most recent time
     decay = np.exp(-(t_max - t) / (duration * tau))
-    
-    x = np.clip(events.x, 0, width - 1).astype(np.int32)
-    y = np.clip(events.y, 0, height - 1).astype(np.int32)
+
+    # Scale spatial coordinates if output size differs from sensor size
+    if events.width != width or events.height != height:
+        scale_x = (width - 1) / max(events.width - 1, 1)
+        scale_y = (height - 1) / max(events.height - 1, 1)
+        x = (events.x * scale_x).astype(np.int32)
+        y = (events.y * scale_y).astype(np.int32)
+    else:
+        x = events.x.astype(np.int32)
+        y = events.y.astype(np.int32)
+    x = np.clip(x, 0, width - 1)
+    y = np.clip(y, 0, height - 1)
     
     p = events.p
     if polarity_channels:
