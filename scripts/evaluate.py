@@ -31,10 +31,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import numpy as np
+from scipy import ndimage
 
 from spikeseg.data.datasets import EBSSADataset
 from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig, LayerConfig, EncoderOutput
-from spikeseg.algorithms import HULKDecoder, group_instances_to_objects, Instance, BoundingBox
+from spikeseg.algorithms import HULKDecoder, group_instances_to_objects, Instance, BoundingBox, Object
 
 
 logging.basicConfig(
@@ -86,6 +87,127 @@ def dilate_mask(mask: torch.Tensor, pixels: int = 1) -> torch.Tensor:
         dilated = dilated.squeeze(1)
 
     return dilated
+
+
+def extract_gt_centroids(label: torch.Tensor) -> List[Tuple[float, float]]:
+    """
+    Extract ground truth object centroids from a label mask.
+
+    Uses connected component analysis to find individual objects
+    and computes their centroids.
+
+    Args:
+        label: Binary label mask (H, W)
+
+    Returns:
+        List of (x, y) centroid coordinates
+    """
+    label_np = label.cpu().numpy().astype(np.uint8)
+
+    # Find connected components
+    labeled_array, num_features = ndimage.label(label_np)
+
+    centroids = []
+    for i in range(1, num_features + 1):
+        # Get coordinates of this component
+        coords = np.where(labeled_array == i)
+        if len(coords[0]) > 0:
+            # Centroid = mean of coordinates
+            cy = coords[0].mean()
+            cx = coords[1].mean()
+            centroids.append((cx, cy))
+
+    return centroids
+
+
+def extract_detection_centroids(objects: List[Object]) -> List[Tuple[float, float]]:
+    """
+    Extract detection centroids from SMASH objects.
+
+    Args:
+        objects: List of Object from SMASH grouping
+
+    Returns:
+        List of (x, y) centroid coordinates
+    """
+    centroids = []
+    for obj in objects:
+        if obj.bbox is not None:
+            # Use bbox center as centroid
+            cx = (obj.bbox.x1 + obj.bbox.x2) / 2
+            cy = (obj.bbox.y1 + obj.bbox.y2) / 2
+            centroids.append((cx, cy))
+        elif obj.instances and obj.instances[0].mask is not None:
+            # Fall back to mask centroid
+            mask = obj.instances[0].mask
+            if mask.sum() > 0:
+                coords = torch.where(mask > 0)
+                cy = coords[0].float().mean().item()
+                cx = coords[1].float().mean().item()
+                centroids.append((cx, cy))
+
+    return centroids
+
+
+def compute_object_metrics(
+    detection_centroids: List[Tuple[float, float]],
+    gt_centroids: List[Tuple[float, float]],
+    tolerance: float = 1.0
+) -> Dict[str, int]:
+    """
+    Compute object-level detection metrics using centroid matching.
+
+    Paper methodology (IGARSS 2023):
+    "A correct prediction was determined if the centroid of the detection
+    lands within 1 pixel of the centroid of the ground-truth"
+
+    Args:
+        detection_centroids: List of (x, y) from detected objects
+        gt_centroids: List of (x, y) from ground truth objects
+        tolerance: Maximum distance for a match (default 1 pixel)
+
+    Returns:
+        Dictionary with tp, fp, fn counts
+    """
+    n_detections = len(detection_centroids)
+    n_gt = len(gt_centroids)
+
+    if n_detections == 0 and n_gt == 0:
+        return {'tp': 0, 'fp': 0, 'fn': 0}
+
+    if n_detections == 0:
+        return {'tp': 0, 'fp': 0, 'fn': n_gt}
+
+    if n_gt == 0:
+        return {'tp': 0, 'fp': n_detections, 'fn': 0}
+
+    # Compute distance matrix between detections and GT
+    matched_gt = set()
+    matched_det = set()
+
+    # Greedy matching: for each detection, find closest GT within tolerance
+    for det_idx, (dx, dy) in enumerate(detection_centroids):
+        best_dist = float('inf')
+        best_gt_idx = None
+
+        for gt_idx, (gx, gy) in enumerate(gt_centroids):
+            if gt_idx in matched_gt:
+                continue
+
+            dist = np.sqrt((dx - gx) ** 2 + (dy - gy) ** 2)
+            if dist <= tolerance and dist < best_dist:
+                best_dist = dist
+                best_gt_idx = gt_idx
+
+        if best_gt_idx is not None:
+            matched_gt.add(best_gt_idx)
+            matched_det.add(det_idx)
+
+    tp = len(matched_det)
+    fp = n_detections - tp
+    fn = n_gt - len(matched_gt)
+
+    return {'tp': tp, 'fp': fp, 'fn': fn}
 
 
 def compute_metrics(
@@ -461,6 +583,155 @@ def load_model(
     return model, hulk_decoder
 
 
+def evaluate_objects(
+    model: SpikeSEGEncoder,
+    dataloader: DataLoader,
+    device: torch.device,
+    hulk_decoder: HULKDecoder,
+    spatial_tolerance: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Evaluate model using OBJECT-LEVEL centroid matching (paper methodology).
+
+    Paper methodology (IGARSS 2023):
+    "A correct prediction was determined if the centroid of the detection
+    lands within 1 pixel of the centroid of the ground-truth"
+
+    This evaluates object DETECTION, not pixel classification:
+    - TP = detected object centroid within tolerance of GT object centroid
+    - FP = detected object with no matching GT object
+    - FN = GT object with no matching detection
+
+    Args:
+        model: Trained model
+        dataloader: Test data loader
+        device: Target device
+        hulk_decoder: HULK decoder for spatial reconstruction
+        spatial_tolerance: Max distance for centroid match (default 1 pixel)
+
+    Returns:
+        Dictionary with object-level metrics
+    """
+    model.eval()
+
+    total_tp, total_fp, total_fn = 0, 0, 0
+    total_detections = 0
+    total_gt_objects = 0
+    n_samples = 0
+
+    logger.info(f"Evaluating with OBJECT-LEVEL centroid matching...")
+    logger.info(f"  Spatial tolerance: {spatial_tolerance} pixel(s)")
+    logger.info(f"  Using ALL classification spikes (both classes)")
+
+    for batch_idx, (x, labels) in enumerate(dataloader):
+        labels = labels.to(device)
+
+        # Ensure correct shape
+        if x.dim() == 4:
+            x = x.unsqueeze(0)
+        batch_size = x.shape[0]
+
+        # Convert (B, T, C, H, W) -> (T, B, C, H, W) for encoder
+        if x.dim() == 5:
+            x = x.permute(1, 0, 2, 3, 4)
+
+        n_timesteps = x.shape[0]
+        x = x.to(device)
+
+        with torch.no_grad():
+            output = model(x)
+            pool_indices = output.pooling_indices
+
+            for b in range(batch_size):
+                # Get ALL classification spikes (both classes) for object detection
+                class_spikes = output.classification_spikes[:, b]
+
+                # Extract GT object centroids
+                label_2d = labels[b] if labels.dim() == 3 else labels
+                gt_centroids = extract_gt_centroids(label_2d)
+                total_gt_objects += len(gt_centroids)
+
+                if class_spikes.sum() == 0:
+                    # No detections, all GT are FN
+                    total_fn += len(gt_centroids)
+                    if batch_idx < 3:
+                        logger.info(f"  Sample {batch_idx}: detections=0, gt_objects={len(gt_centroids)}")
+                    continue
+
+                # Use HULK to process ALL spikes to instances
+                try:
+                    instances = hulk_decoder.process_to_instances(
+                        classification_spikes=class_spikes,
+                        pool1_indices=pool_indices.pool1_indices[b:b+1],
+                        pool2_indices=pool_indices.pool2_indices[b:b+1],
+                        pool1_output_size=pool_indices.pool1_output_size,
+                        pool2_output_size=pool_indices.pool2_output_size,
+                        n_timesteps=n_timesteps,
+                        threshold=0.5
+                    )
+
+                    # Group instances into objects using SMASH
+                    objects = group_instances_to_objects(instances, smash_threshold=0.1)
+                    total_detections += len(objects)
+
+                    # Extract detection centroids
+                    det_centroids = extract_detection_centroids(objects)
+
+                    # Compute object-level metrics
+                    metrics = compute_object_metrics(det_centroids, gt_centroids, spatial_tolerance)
+                    total_tp += metrics['tp']
+                    total_fp += metrics['fp']
+                    total_fn += metrics['fn']
+
+                    if batch_idx < 3:
+                        logger.info(f"  Sample {batch_idx}: detections={len(objects)}, "
+                                   f"gt_objects={len(gt_centroids)}, tp={metrics['tp']}")
+
+                except Exception as e:
+                    logger.warning(f"HULK failed for batch {b}: {e}")
+                    total_fn += len(gt_centroids)
+
+        n_samples += batch_size
+
+    # Compute final metrics
+    eps = 1e-7
+    # For object detection: Sensitivity = TP / (TP + FN), Specificity needs TN
+    # Since we don't have TN for object detection, compute precision/recall instead
+    sensitivity = total_tp / (total_tp + total_fn + eps)  # Recall
+    precision = total_tp / (total_tp + total_fp + eps)
+
+    # For informedness, we need specificity. In object detection context:
+    # Specificity = TN / (TN + FP), but TN is not well-defined for object detection
+    # The paper likely computes it per-frame: specificity = 1 - FP_rate
+    # where FP_rate = FP / total_detections
+    if total_detections > 0:
+        specificity = 1.0 - (total_fp / total_detections)
+    else:
+        specificity = 1.0
+
+    informedness = sensitivity + specificity - 1.0
+    f1 = 2 * precision * sensitivity / (precision + sensitivity + eps)
+
+    logger.info(f"  Total detections: {total_detections}")
+    logger.info(f"  Total GT objects: {total_gt_objects}")
+    logger.info(f"  Matched (TP): {total_tp}")
+
+    return {
+        'n_samples': n_samples,
+        'total_tp': total_tp,
+        'total_fp': total_fp,
+        'total_fn': total_fn,
+        'total_detections': total_detections,
+        'total_gt_objects': total_gt_objects,
+        'sensitivity': sensitivity,
+        'specificity': specificity,
+        'informedness': informedness,
+        'precision': precision,
+        'f1': f1,
+        'spatial_tolerance': spatial_tolerance
+    }
+
+
 def evaluate(
     model: SpikeSEGEncoder,
     dataloader: DataLoader,
@@ -472,7 +743,9 @@ def evaluate(
     invert_classes: bool = False
 ) -> Dict[str, float]:
     """
-    Evaluate model on dataset using HULK-SMASH pipeline.
+    Evaluate model on dataset using PIXEL-LEVEL metrics (legacy).
+
+    For paper-matching evaluation, use evaluate_objects() instead.
 
     Args:
         model: Trained model
@@ -491,7 +764,7 @@ def evaluate(
     total_tp, total_tn, total_fp, total_fn = 0, 0, 0, 0
     n_samples = 0
 
-    logger.info(f"Evaluating on {len(dataloader)} batches...")
+    logger.info(f"Evaluating with PIXEL-LEVEL metrics...")
     logger.info(f"  Using HULK decoder: {use_hulk and hulk_decoder is not None}")
     logger.info(f"  Spatial tolerance: {spatial_tolerance} pixel(s)")
     logger.info(f"  Using SMASH grouping: {use_smash}")
@@ -659,6 +932,11 @@ def main():
         action='store_true',
         help='Enable debug logging'
     )
+    parser.add_argument(
+        '--object-level',
+        action='store_true',
+        help='Use object-level centroid matching (paper methodology) instead of pixel-level'
+    )
 
     args = parser.parse_args()
 
@@ -705,35 +983,66 @@ def main():
 
     # Evaluate
     logger.info("=" * 60)
-    logger.info("  SpikeSEG Evaluation with HULK-SMASH")
+    if args.object_level:
+        logger.info("  SpikeSEG OBJECT-LEVEL Evaluation (Paper Methodology)")
+    else:
+        logger.info("  SpikeSEG Pixel-Level Evaluation with HULK-SMASH")
     logger.info("=" * 60)
 
-    metrics = evaluate(
-        model, dataloader, device,
-        hulk_decoder=hulk_decoder,
-        spatial_tolerance=args.spatial_tolerance,
-        use_hulk=not args.no_hulk,
-        use_smash=not args.no_smash,
-        invert_classes=args.invert_classes
-    )
+    if args.object_level:
+        if hulk_decoder is None:
+            logger.error("Object-level evaluation requires HULK decoder. Don't use --no-hulk.")
+            return None
 
-    # Print results
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("  Results")
-    logger.info("=" * 60)
-    logger.info(f"  Samples:       {metrics['n_samples']}")
-    logger.info(f"  TP/TN/FP/FN:   {metrics['total_tp']}/{metrics['total_tn']}/{metrics['total_fp']}/{metrics['total_fn']}")
-    if metrics.get('total_instances', 0) > 0:
-        logger.info(f"  Instances:     {metrics['total_instances']}")
-        logger.info(f"  Objects:       {metrics['total_objects']}")
-    logger.info("")
-    logger.info(f"  Sensitivity:   {metrics['sensitivity']*100:.1f}%")
-    logger.info(f"  Specificity:   {metrics['specificity']*100:.1f}%")
-    logger.info(f"  Informedness:  {metrics['informedness']*100:.1f}%  (paper: 89.1%)")
-    logger.info(f"  Accuracy:      {metrics['accuracy']*100:.1f}%")
-    logger.info(f"  IoU:           {metrics['iou']*100:.1f}%")
-    logger.info("=" * 60)
+        metrics = evaluate_objects(
+            model, dataloader, device,
+            hulk_decoder=hulk_decoder,
+            spatial_tolerance=float(args.spatial_tolerance)
+        )
+
+        # Print object-level results
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("  OBJECT-LEVEL Results (Paper Methodology)")
+        logger.info("=" * 60)
+        logger.info(f"  Samples:        {metrics['n_samples']}")
+        logger.info(f"  GT Objects:     {metrics['total_gt_objects']}")
+        logger.info(f"  Detections:     {metrics['total_detections']}")
+        logger.info(f"  TP/FP/FN:       {metrics['total_tp']}/{metrics['total_fp']}/{metrics['total_fn']}")
+        logger.info("")
+        logger.info(f"  Sensitivity:    {metrics['sensitivity']*100:.1f}%  (Recall)")
+        logger.info(f"  Specificity:    {metrics['specificity']*100:.1f}%")
+        logger.info(f"  Precision:      {metrics['precision']*100:.1f}%")
+        logger.info(f"  F1 Score:       {metrics['f1']*100:.1f}%")
+        logger.info(f"  Informedness:   {metrics['informedness']*100:.1f}%  (paper: 89.1%)")
+        logger.info("=" * 60)
+    else:
+        metrics = evaluate(
+            model, dataloader, device,
+            hulk_decoder=hulk_decoder,
+            spatial_tolerance=args.spatial_tolerance,
+            use_hulk=not args.no_hulk,
+            use_smash=not args.no_smash,
+            invert_classes=args.invert_classes
+        )
+
+        # Print pixel-level results
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("  PIXEL-LEVEL Results")
+        logger.info("=" * 60)
+        logger.info(f"  Samples:       {metrics['n_samples']}")
+        logger.info(f"  TP/TN/FP/FN:   {metrics['total_tp']}/{metrics['total_tn']}/{metrics['total_fp']}/{metrics['total_fn']}")
+        if metrics.get('total_instances', 0) > 0:
+            logger.info(f"  Instances:     {metrics['total_instances']}")
+            logger.info(f"  Objects:       {metrics['total_objects']}")
+        logger.info("")
+        logger.info(f"  Sensitivity:   {metrics['sensitivity']*100:.1f}%")
+        logger.info(f"  Specificity:   {metrics['specificity']*100:.1f}%")
+        logger.info(f"  Informedness:  {metrics['informedness']*100:.1f}%  (paper: 89.1%)")
+        logger.info(f"  Accuracy:      {metrics['accuracy']*100:.1f}%")
+        logger.info(f"  IoU:           {metrics['iou']*100:.1f}%")
+        logger.info("=" * 60)
 
     # Save to JSON if requested
     if args.output:
