@@ -666,6 +666,19 @@ def evaluate_objects(
                         logger.info(f"  Sample {batch_idx}: detections=0, gt_objects={len(gt_centroids)}")
                     continue
 
+                # Debug: show classification spike locations
+                if batch_idx < 3:
+                    spike_locs = torch.nonzero(class_spikes.sum(dim=0))  # Sum over time
+                    logger.info(f"    Classification map shape: {class_spikes.shape}")
+                    logger.info(f"    Total classification spikes: {class_spikes.sum().item():.0f}")
+                    if len(spike_locs) > 0:
+                        logger.info(f"    Spike locations (class, y, x) first 10: {spike_locs[:10].tolist()}")
+                    # Check pooling indices
+                    p1_idx = pool_indices.pool1_indices[b]
+                    p2_idx = pool_indices.pool2_indices[b]
+                    logger.info(f"    Pool1 indices shape: {p1_idx.shape}, unique values: {p1_idx.unique().shape[0]}")
+                    logger.info(f"    Pool2 indices shape: {p2_idx.shape}, unique values: {p2_idx.unique().shape[0]}")
+
                 # Use HULK to process ALL spikes to instances
                 try:
                     instances = hulk_decoder.process_to_instances(
