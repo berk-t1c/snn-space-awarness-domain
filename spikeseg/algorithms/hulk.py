@@ -656,10 +656,11 @@ class HULKDecoder(nn.Module):
         self.pool_kernel_size = pool_kernel_size
         
         # Extract dimensions
-        self.n_classes = conv3_weight.shape[0]
-        self.conv2_channels = conv3_weight.shape[1]  # Input to conv3
-        self.conv1_channels = trans_conv2_weight.shape[0]  # Output of trans_conv2
-        self.input_channels = trans_conv1_weight.shape[0]  # Output of trans_conv1
+        # Weight shapes: conv1=(4,2,k,k), conv2=(36,4,k,k), conv3=(2,36,k,k)
+        self.n_classes = conv3_weight.shape[0]           # 2 (output classes)
+        self.conv2_channels = conv3_weight.shape[1]      # 36 (pool2_indices channels)
+        self.conv1_channels = trans_conv2_weight.shape[1]  # 4 (pool1_indices channels)
+        self.input_channels = trans_conv1_weight.shape[1]  # 2 (input image channels)
         
         # Total features for ASH (from paper: 4 + 36 + 1 = 41 for face network)
         self.n_features = self.conv1_channels + self.conv2_channels + self.n_classes
