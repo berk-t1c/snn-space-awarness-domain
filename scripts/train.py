@@ -626,7 +626,11 @@ class LayerStats:
     n_spikes: int = 0
     n_updates: int = 0
     convergence_ratio: float = 0.0
-    
+    # Spatial wins tracking: maps (channel, y, x) -> win count
+    # Used for spatial cooldown to prevent domination
+    spatial_wins: Dict[Tuple[int, int, int], int] = field(default_factory=dict)
+    spatial_cooldown_threshold: int = 5  # Max wins before location is cooled down
+
     def __post_init__(self):
         if len(self.wins) == 0:
             self.wins = np.zeros(self.n_features, dtype=np.int32)
@@ -640,15 +644,35 @@ class LayerStats:
     
     def record_winners(self, winners: List) -> None:
         """Record WTA winners.
-        
+
         Args:
             winners: List of feature indices (int) OR tuples (feature_idx, y, x)
         """
         for w in winners:
             # Handle both int and tuple formats
-            feature_idx = w[0] if isinstance(w, (tuple, list)) else w
+            if isinstance(w, (tuple, list)) and len(w) >= 3:
+                feature_idx, y, x = w[0], w[1], w[2]
+                # Track spatial wins for cooldown
+                key = (feature_idx, y, x)
+                self.spatial_wins[key] = self.spatial_wins.get(key, 0) + 1
+            else:
+                feature_idx = w[0] if isinstance(w, (tuple, list)) else w
+
             if 0 <= feature_idx < self.n_features:
                 self.wins[feature_idx] += 1
+
+    def is_location_cooled(self, feature_idx: int, y: int, x: int) -> bool:
+        """Check if a spatial location has exceeded cooldown threshold.
+
+        Used to prevent the same neuron from dominating WTA competition.
+        """
+        key = (feature_idx, y, x)
+        wins = self.spatial_wins.get(key, 0)
+        return wins >= self.spatial_cooldown_threshold
+
+    def reset_spatial_cooldown(self) -> None:
+        """Reset spatial wins tracking (e.g., at epoch start)."""
+        self.spatial_wins.clear()
     
     def compute_convergence(self, min_wins: int) -> float:
         """Compute fraction of converged features."""
@@ -1744,10 +1768,15 @@ class STDPTrainer:
             epoch_start = time.time()
             
             self.logger.info(f"Epoch {epoch + 1}/{self.config.max_epochs}")
-            
+
             # Reset model state
             self.model.reset_state()
-            
+
+            # Reset spatial cooldown for the layer at each epoch
+            # This gives all neurons a fresh chance to compete
+            if layer_name in self.metrics.layers:
+                self.metrics.layers[layer_name].reset_spatial_cooldown()
+
             # Run training epoch
             epoch_stats = self._train_epoch(layer_name, shutdown)
             
@@ -1986,7 +2015,8 @@ class STDPTrainer:
             post_spike_times = layer_spike_times.get(layer_name)
 
             # Find WTA winners using spike times for proper first-spike competition
-            winners = self._find_wta_winners(post_spikes, post_spike_times)
+            # Pass layer_name for spatial cooldown tracking
+            winners = self._find_wta_winners(post_spikes, post_spike_times, layer_name)
             result['winners'] = [(w[0], w[1], w[2]) for w in winners]  # Ensure tuple format
 
             # Apply STDP if we have winners
@@ -2080,7 +2110,8 @@ class STDPTrainer:
     def _find_wta_winners(
         self,
         spikes: torch.Tensor,
-        spike_times: Optional[torch.Tensor] = None
+        spike_times: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None
     ) -> List[Tuple[int, int, int]]:
         """
         Find Winner-Take-All winners using PROPER competition (VECTORIZED).
@@ -2097,19 +2128,24 @@ class STDPTrainer:
                (the first to fire across all spatial locations)
             2. INTER-MAP (local): At each location, only ONE feature wins
 
-        CRITICAL FIX: Previous implementation only did inter-map competition,
-        allowing multiple spatial locations to update the same feature map's
-        weights. This caused all features to converge to averaged/same patterns.
+        SPATIAL COOLDOWN: Neurons that have won too many times are temporarily
+        excluded from competition to give other neurons a chance to learn.
 
         Args:
             spikes: Spike tensor (B, C, H, W).
             spike_times: First spike times (B, C, H, W). -1 = never fired.
+            layer_name: Layer name for spatial cooldown tracking.
 
         Returns:
             List of (feature_idx, y, x) tuples for winning neurons.
             At most ONE winner per feature map (intra-map competition).
         """
         wta_cfg = self.config.wta
+
+        # Get layer stats for spatial cooldown (if layer name provided)
+        layer_stats = None
+        if layer_name and layer_name in self.metrics.layers:
+            layer_stats = self.metrics.layers[layer_name]
 
         if spikes.dim() != 4:
             # Fallback for non-4D tensors
@@ -2133,6 +2169,17 @@ class STDPTrainer:
                 times,
                 torch.tensor(float('inf'), device=device, dtype=times.dtype)
             )  # (C, H, W)
+
+            # ================================================================
+            # SPATIAL COOLDOWN: Mark cooled locations as inf so they don't win
+            # This prevents the same neuron from dominating WTA competition
+            # ================================================================
+            if layer_stats is not None:
+                times_for_argmin = times_for_argmin.clone()  # Don't modify original
+                for (feat_idx, y, x), wins in layer_stats.spatial_wins.items():
+                    if wins >= layer_stats.spatial_cooldown_threshold:
+                        if 0 <= feat_idx < C and 0 <= y < H and 0 <= x < W:
+                            times_for_argmin[feat_idx, y, x] = float('inf')
 
             # ================================================================
             # INTRA-MAP COMPETITION (CRITICAL FIX)
@@ -2190,7 +2237,16 @@ class STDPTrainer:
         else:
             # VECTORIZED fallback: use spike count with intra-map competition
             # Use first batch element
-            spikes_b = spikes[0]  # (C, H, W)
+            spikes_b = spikes[0].clone()  # (C, H, W)
+
+            # ================================================================
+            # SPATIAL COOLDOWN: Zero out cooled locations so they don't win
+            # ================================================================
+            if layer_stats is not None:
+                for (feat_idx, y, x), wins in layer_stats.spatial_wins.items():
+                    if wins >= layer_stats.spatial_cooldown_threshold:
+                        if 0 <= feat_idx < C and 0 <= y < H and 0 <= x < W:
+                            spikes_b[feat_idx, y, x] = 0
 
             # For each feature map, find the location with most spikes
             spikes_flat = spikes_b.view(C, -1)  # (C, H*W)
@@ -2361,7 +2417,11 @@ class STDPTrainer:
         
         layer_stats = self.metrics.layers[layer_name]
         max_wins = layer_stats.wins.max() if len(layer_stats.wins) > 0 else 0
-        
+
+        # Count cooled neurons (spatial positions that hit cooldown threshold)
+        n_cooled = sum(1 for wins in layer_stats.spatial_wins.values()
+                       if wins >= layer_stats.spatial_cooldown_threshold)
+
         # Base message
         msg = (
             f"  [{batch_idx + 1}] samples={stats['n_samples']}, "
@@ -2369,7 +2429,11 @@ class STDPTrainer:
             f"conv={convergence*100:.1f}%, "
             f"max_wins={max_wins}"
         )
-        
+
+        # Add spatial cooldown info
+        if n_cooled > 0:
+            msg += f", cooled={n_cooled}"
+
         # Add homeostasis info if available
         if layer_name in self.threshold_managers:
             thresh_mgr = self.threshold_managers[layer_name]
@@ -2377,7 +2441,7 @@ class STDPTrainer:
             msg += f", θ_mean={thresh_stats['mean_threshold']:.2f}"
             if thresh_stats['n_dead_neurons'] > 0:
                 msg += f", dead={thresh_stats['n_dead_neurons']}"
-        
+
         self.logger.info(msg)
     
     def _log_to_tensorboard(
