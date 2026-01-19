@@ -217,7 +217,8 @@ def predict_sample_hulk(
     x: torch.Tensor,
     device: torch.device,
     target_size: Tuple[int, int] = (128, 128),
-    threshold: float = 0.5
+    threshold: float = 0.5,
+    invert_classes: bool = False
 ) -> Tuple[torch.Tensor, List[Instance]]:
     """
     Run inference using HULK decoder for proper spatial reconstruction.
@@ -234,6 +235,7 @@ def predict_sample_hulk(
         device: Target device
         target_size: Output size (H, W)
         threshold: HULK threshold for contributing pixels
+        invert_classes: If True, use class 0 as satellite instead of class 1
 
     Returns:
         Tuple of (predictions (B, H, W), instances list)
@@ -274,10 +276,27 @@ def predict_sample_hulk(
             if class_spikes.sum() == 0:
                 continue
 
-            # Use HULK to process all spikes to instances
+            # Debug: Count spikes per class
+            class0_spikes = class_spikes[:, 0, :, :].sum().item()
+            class1_spikes = class_spikes[:, 1, :, :].sum().item()
+            if b == 0:  # Only log for first batch item
+                logger.debug(f"Spikes: class0={class0_spikes:.0f}, class1={class1_spikes:.0f}")
+
+            # CRITICAL FIX: Only process satellite class spikes
+            # HULK processes all classes by default, but we only want satellite detections
+            # Create a filtered spike tensor with only satellite class
+            satellite_spikes = class_spikes.clone()
+            if invert_classes:
+                # Use class 0 as satellite (model may have learned inverted labels)
+                satellite_spikes[:, 1, :, :] = 0  # Zero out class 1 spikes
+            else:
+                # Normal: class 1 is satellite
+                satellite_spikes[:, 0, :, :] = 0  # Zero out class 0 spikes
+
+            # Use HULK to process satellite spikes to instances
             try:
                 instances = hulk_decoder.process_to_instances(
-                    classification_spikes=class_spikes,
+                    classification_spikes=satellite_spikes,
                     pool1_indices=pool_indices.pool1_indices[b:b+1],
                     pool2_indices=pool_indices.pool2_indices[b:b+1],
                     pool1_output_size=pool_indices.pool1_output_size,
@@ -328,7 +347,8 @@ def predict_sample(
     device: torch.device,
     hulk_decoder: Optional[HULKDecoder] = None,
     target_size: Tuple[int, int] = (128, 128),
-    use_hulk: bool = True
+    use_hulk: bool = True,
+    invert_classes: bool = False
 ) -> Tuple[torch.Tensor, Optional[List[Instance]]]:
     """
     Run inference on a single sample.
@@ -340,12 +360,13 @@ def predict_sample(
         hulk_decoder: Optional HULK decoder for proper spatial reconstruction
         target_size: Output size for predictions
         use_hulk: Whether to use HULK (if decoder provided)
+        invert_classes: If True, use class 0 as satellite instead of class 1
 
     Returns:
         Tuple of (predictions (B, H, W), instances or None)
     """
     if use_hulk and hulk_decoder is not None:
-        return predict_sample_hulk(model, hulk_decoder, x, device, target_size)
+        return predict_sample_hulk(model, hulk_decoder, x, device, target_size, invert_classes=invert_classes)
     else:
         predictions = predict_sample_simple(model, x, device, target_size)
         return predictions, None
@@ -441,7 +462,8 @@ def evaluate(
     hulk_decoder: Optional[HULKDecoder] = None,
     spatial_tolerance: int = 1,
     use_hulk: bool = True,
-    use_smash: bool = True
+    use_smash: bool = True,
+    invert_classes: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate model on dataset using HULK-SMASH pipeline.
@@ -454,6 +476,7 @@ def evaluate(
         spatial_tolerance: Pixels of tolerance for TP (default 1 per paper)
         use_hulk: Whether to use HULK decoder
         use_smash: Whether to use SMASH grouping
+        invert_classes: If True, use class 0 as satellite instead of class 1
 
     Returns:
         Aggregated metrics
@@ -466,6 +489,7 @@ def evaluate(
     logger.info(f"  Using HULK decoder: {use_hulk and hulk_decoder is not None}")
     logger.info(f"  Spatial tolerance: {spatial_tolerance} pixel(s)")
     logger.info(f"  Using SMASH grouping: {use_smash}")
+    logger.info(f"  Invert classes: {invert_classes} (satellite=class {'0' if invert_classes else '1'})")
 
     total_spikes = 0
     total_label_positives = 0
@@ -482,7 +506,8 @@ def evaluate(
             model, x, device,
             hulk_decoder=hulk_decoder,
             target_size=target_size,
-            use_hulk=use_hulk
+            use_hulk=use_hulk,
+            invert_classes=invert_classes
         )
 
         # Debug: count spikes and positive labels
@@ -618,8 +643,22 @@ def main():
         action='store_true',
         help='Disable SMASH instance grouping'
     )
+    parser.add_argument(
+        '--invert-classes',
+        action='store_true',
+        help='Invert class assignment (use class 0 as satellite instead of class 1)'
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug logging'
+    )
 
     args = parser.parse_args()
+
+    # Set log level
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     device = torch.device(args.device)
     logger.info(f"Using device: {device}")
@@ -668,7 +707,8 @@ def main():
         hulk_decoder=hulk_decoder,
         spatial_tolerance=args.spatial_tolerance,
         use_hulk=not args.no_hulk,
-        use_smash=not args.no_smash
+        use_smash=not args.no_smash,
+        invert_classes=args.invert_classes
     )
 
     # Print results
