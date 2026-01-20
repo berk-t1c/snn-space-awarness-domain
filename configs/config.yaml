@@ -47,7 +47,7 @@ stdp:
   weight_min: 0.0         # Minimum weight value
   weight_max: 1.0         # Maximum weight value
   weight_init_mean: 0.8   # Weight initialization mean
-  weight_init_std: 0.05   # Weight initialization std (Kheradpisheh 2018: 0.05 for diversity)
+  weight_init_std: 0.01   # Weight initialization std (IGARSS 2023: 0.8±0.01)
   use_soft_bounds: true   # Use multiplicative STDP: Δw = α·w·(1-w)
 
 # -----------------------------------------------------------------------------
@@ -85,8 +85,8 @@ homeostasis:
 # Convergence Monitoring
 # -----------------------------------------------------------------------------
 convergence:
-  min_wins_per_neuron: 2    # Min WTA wins for neuron to be "converged" (very low for small data)
-  target_ratio: 0.40        # Target fraction of converged neurons (50% realistic for 67 samples)
+  min_wins_per_neuron: 10   # Min WTA wins for neuron to be "converged" (higher for robust features)
+  target_ratio: 0.90        # Target fraction of converged neurons (90% for proper feature learning)
   patience: 20              # Epochs without improvement before stopping (very patient)
   delta_threshold: 0.0001   # Weight change threshold for convergence
   check_interval: 100       # Check convergence every N samples
@@ -136,7 +136,7 @@ data:
 # IGARSS 2023 / EBSSA: 4 features in layer 1, 36 features in layer 2
 # Kernel sizes: 5×5 for Conv1/Conv2, 7×7 for Conv3
 model:
-  n_classes: 2              # Number of output classes (2 for EBSSA binary segmentation)
+  n_classes: 1              # Detection only (HULK decoder handles instance segmentation)
   conv1_channels: 4         # Conv1 output channels
   conv2_channels: 36        # Conv2 output channels
   kernel_sizes: [5, 5, 7]   # Kernel sizes for Conv1, Conv2, Conv3
