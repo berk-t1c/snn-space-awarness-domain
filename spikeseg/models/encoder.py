@@ -257,10 +257,10 @@ class EncoderConfig:
     conv3: LayerConfig = field(default_factory=lambda: LayerConfig(
         out_channels=1, kernel_size=7, threshold=10.0, leak=0.0  # No leak
     ))
-    # Pool1: 7×7 kernel, stride 6 (Kheradpisheh 2018 Table 1)
-    pool1_kernel_size: int = 7
-    pool1_stride: int = 6
-    # Pool2: 2×2 kernel, stride 2 (Kheradpisheh 2018 Table 1)
+    # Pool1: 2×2 kernel, stride 2 (IGARSS 2023)
+    pool1_kernel_size: int = 2
+    pool1_stride: int = 2
+    # Pool2: 2×2 kernel, stride 2 (IGARSS 2023)
     pool2_kernel_size: int = 2
     pool2_stride: int = 2
     # Legacy: for backward compatibility
@@ -333,9 +333,9 @@ class EncoderConfig:
                     leak=0.0,  # No leak
                     leak_mode="subtractive"
                 ),
-                # Kheradpisheh 2018 pooling configuration
-                pool1_kernel_size=7,
-                pool1_stride=6,
+                # IGARSS 2023: 2x2 pooling (not Kheradpisheh's 7x7 stride 6)
+                pool1_kernel_size=2,
+                pool1_stride=2,
                 pool2_kernel_size=2,
                 pool2_stride=2,
                 use_wta=True,

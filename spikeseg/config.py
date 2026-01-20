@@ -203,7 +203,7 @@ class STDPParams:
     weight_min: float = 0.0
     weight_max: float = 1.0
     weight_init_mean: float = 0.8
-    weight_init_std: float = 0.01  # IGARSS 2023: 0.01
+    weight_init_std: float = 0.05  # Kheradpisheh 2018: 0.05 for diversity
     use_soft_bounds: bool = True
     
     @classmethod
@@ -224,8 +224,8 @@ class ModelParams:
     pool1_stride: int = 2
     pool2_kernel: int = 2
     pool2_stride: int = 2
-    thresholds: tuple = (10.0, 10.0, 10.0)  # Adaptive via PENT
-    leaks: tuple = (9.0, 6.0, 0.0)
+    thresholds: tuple = (0.1, 0.1, 0.1)  # Very low for sparse EBSSA events
+    leaks: tuple = (0.09, 0.01, 0.0)  # 90%, 10%, 0% of threshold
     use_dog_filters: bool = True
     
     def __post_init__(self):

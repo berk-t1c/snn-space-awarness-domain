@@ -149,7 +149,7 @@ class STDPParams:
     weight_min: float = 0.0     # Minimum weight bound
     weight_max: float = 1.0     # Maximum weight bound
     weight_init_mean: float = 0.8  # Initial weight mean
-    weight_init_std: float = 0.01  # Initial weight std
+    weight_init_std: float = 0.05  # Initial weight std (Kheradpisheh 2018: 0.05 for diversity)
     use_soft_bounds: bool = True   # Use multiplicative soft bounds
     
     def validate(self) -> None:
@@ -322,8 +322,8 @@ class ModelParams:
     pool2_stride: int = 2        # Pool2 stride
     
     # Layer-wise leak (IGARSS 2023: "90% and 10% of threshold")
-    thresholds: Tuple[float, float, float] = (10.0, 10.0, 10.0)
-    leaks: Tuple[float, float, float] = (9.0, 1.0, 0.0)  # 90%, 10%, 0%
+    thresholds: Tuple[float, float, float] = (0.1, 0.1, 0.1)  # Low for sparse events
+    leaks: Tuple[float, float, float] = (0.09, 0.01, 0.0)  # 90%, 10%, 0% of threshold
     
     # Initialization
     use_dog_filters: bool = True # Use DoG filters for Conv1
@@ -478,16 +478,17 @@ class TrainingConfig:
                     lr_plus=0.04,
                     lr_minus=0.03,
                     weight_init_mean=0.8,
-                    weight_init_std=0.01
+                    weight_init_std=0.05  # Kheradpisheh 2018: 0.05 for weight diversity
                 ),
                 model=ModelParams(
                     conv1_channels=4,
                     conv2_channels=36,
                     kernel_sizes=(5, 5, 7),
-                    leaks=(9.0, 1.0, 0.0),  # 90%, 10%, 0%
+                    thresholds=(0.1, 0.1, 0.1),  # Low thresholds for sparse EBSSA events
+                    leaks=(0.09, 0.01, 0.0),  # 90%, 10%, 0% of threshold
                     use_dog_filters=True
                 ),
-                max_epochs=1,  # "Features converge within 1 epoch"
+                max_epochs=50,  # More epochs for STDP convergence
             )
         elif paper.lower() == "kheradpisheh2018":
             config = cls(
