@@ -406,25 +406,30 @@ def predict_sample_hulk(
             if class_spikes.sum() == 0:
                 continue
 
-            # Debug: Count spikes per class and check overlap
-            class0_mask = (class_spikes[:, 0, :, :].sum(dim=0) > 0)  # (H, W)
-            class1_mask = (class_spikes[:, 1, :, :].sum(dim=0) > 0)  # (H, W)
-            class0_spikes = class0_mask.sum().item()
-            class1_spikes = class1_mask.sum().item()
-            overlap = (class0_mask & class1_mask).sum().item()
-            if b == 0:  # Only log for first batch item
-                logger.debug(f"Spikes: class0={class0_spikes:.0f}, class1={class1_spikes:.0f}, overlap={overlap:.0f}")
-
-            # CRITICAL FIX: Only process satellite class spikes
-            # HULK processes all classes by default, but we only want satellite detections
-            # Create a filtered spike tensor with only satellite class
-            satellite_spikes = class_spikes.clone()
-            if invert_classes:
-                # Use class 0 as satellite (model may have learned inverted labels)
-                satellite_spikes[:, 1, :, :] = 0  # Zero out class 1 spikes
+            # Debug: Count spikes per class
+            n_classes = class_spikes.shape[1]
+            if n_classes == 1:
+                # Detection mode: single class, all spikes are detections
+                total_spikes = class_spikes.sum().item()
+                if b == 0:
+                    logger.debug(f"Detection mode: {total_spikes:.0f} total spikes")
+                satellite_spikes = class_spikes  # Use all spikes
             else:
-                # Normal: class 1 is satellite
-                satellite_spikes[:, 0, :, :] = 0  # Zero out class 0 spikes
+                # Classification mode: 2 classes (background/satellite)
+                class0_mask = (class_spikes[:, 0, :, :].sum(dim=0) > 0)  # (H, W)
+                class1_mask = (class_spikes[:, 1, :, :].sum(dim=0) > 0)  # (H, W)
+                class0_spikes = class0_mask.sum().item()
+                class1_spikes = class1_mask.sum().item()
+                overlap = (class0_mask & class1_mask).sum().item()
+                if b == 0:
+                    logger.debug(f"Spikes: class0={class0_spikes:.0f}, class1={class1_spikes:.0f}, overlap={overlap:.0f}")
+
+                # Create a filtered spike tensor with only satellite class
+                satellite_spikes = class_spikes.clone()
+                if invert_classes:
+                    satellite_spikes[:, 1, :, :] = 0  # Zero out class 1 spikes
+                else:
+                    satellite_spikes[:, 0, :, :] = 0  # Zero out class 0 spikes
 
             # Use HULK to process satellite spikes to instances
             try:
@@ -530,11 +535,20 @@ def load_model(
     thresholds = [0.1, 0.1, 0.1]
     leaks = [0.09, 0.01, 0.0]
 
+    # Get n_classes from checkpoint config
+    # Config is saved at checkpoint['config']['model']['n_classes']
+    try:
+        n_classes = checkpoint['config']['model']['n_classes']
+        logger.info(f"Loaded n_classes={n_classes} from checkpoint config")
+    except (KeyError, TypeError):
+        n_classes = 1  # Default to 1 (detection mode per IGARSS 2023)
+        logger.info(f"Using default n_classes={n_classes}")
+
     enc_config = EncoderConfig(
         input_channels=2,
         conv1=LayerConfig(out_channels=4, kernel_size=5, threshold=thresholds[0], leak=leaks[0]),
         conv2=LayerConfig(out_channels=36, kernel_size=5, threshold=thresholds[1], leak=leaks[1]),
-        conv3=LayerConfig(out_channels=2, kernel_size=7, threshold=thresholds[2], leak=leaks[2]),
+        conv3=LayerConfig(out_channels=n_classes, kernel_size=7, threshold=thresholds[2], leak=leaks[2]),
         # IGARSS 2023: 2x2 pooling (not Kheradpisheh's 7x7 stride 6)
         pool1_kernel_size=2,
         pool1_stride=2,
