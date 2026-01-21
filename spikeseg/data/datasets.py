@@ -1451,8 +1451,10 @@ class EBSSADataset(EventDataset):
         mask = torch.zeros(self.height, self.width, dtype=torch.long)
 
         # Scale factors from sensor resolution to output size
-        scale_x = self.width / events.width
-        scale_y = self.height / events.height
+        # IMPORTANT: Use same scaling as events_to_voxel_grid to ensure alignment!
+        # Events use (width-1)/(sensor_width-1) for proper edge mapping
+        scale_x = (self.width - 1) / max(events.width - 1, 1)
+        scale_y = (self.height - 1) / max(events.height - 1, 1)
 
         # EBSSA format: Obj contains object trajectories
         if 'Obj' in labels:
@@ -1543,8 +1545,12 @@ class EBSSADataset(EventDataset):
                         # Use larger radius to capture the full event generation area
                         radius = 5  # Mask radius in output pixels
                         for i in range(len(pos_x)):
-                            x = int(pos_x[i] * scale_x)
-                            y = int(pos_y[i] * scale_y)
+                            # Use round() to match event coordinate conversion
+                            x = int(round(pos_x[i] * scale_x))
+                            y = int(round(pos_y[i] * scale_y))
+                            # Clip to valid range
+                            x = max(0, min(self.width - 1, x))
+                            y = max(0, min(self.height - 1, y))
                             # Create circular mask around object
                             y1 = max(0, y - radius)
                             y2 = min(self.height, y + radius + 1)
