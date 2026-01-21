@@ -590,17 +590,22 @@ def load_model(
 
     # Extract config from checkpoint or use defaults
     # Use IGARSS 2023 defaults with proper LayerConfig structure
-    thresholds = [0.1, 0.1, 0.1]
-    leaks = [0.09, 0.01, 0.0]
+    default_thresholds = [0.1, 0.1, 0.1]
+    default_leaks = [0.09, 0.01, 0.0]
 
-    # Get n_classes from checkpoint config
-    # Config is saved at checkpoint['config']['model']['n_classes']
+    # Get model parameters from checkpoint config
     try:
-        n_classes = checkpoint['config']['model']['n_classes']
-        logger.info(f"Loaded n_classes={n_classes} from checkpoint config")
+        model_cfg = checkpoint['config']['model']
+        n_classes = model_cfg.get('n_classes', 1)
+        thresholds = list(model_cfg.get('thresholds', default_thresholds))
+        leaks = list(model_cfg.get('leaks', default_leaks))
+        logger.info(f"Loaded model config from checkpoint: n_classes={n_classes}, "
+                   f"thresholds={thresholds}, leaks={leaks}")
     except (KeyError, TypeError):
         n_classes = 1  # Default to 1 (detection mode per IGARSS 2023)
-        logger.info(f"Using default n_classes={n_classes}")
+        thresholds = default_thresholds
+        leaks = default_leaks
+        logger.info(f"Using default model config: n_classes={n_classes}")
 
     # Get input_channels from checkpoint config
     try:
