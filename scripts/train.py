@@ -1551,14 +1551,14 @@ class STDPTrainer:
                     if getattr(data_cfg, 'train_recordings_file', None):
                         with open(data_cfg.train_recordings_file, 'r') as f:
                             train_paths = set(line.strip() for line in f if line.strip())
-                        train_dataset.recordings = [r for r in train_dataset.recordings if r['event_path'] in train_paths]
+                        train_dataset.recordings = [r for r in train_dataset.recordings if str(r['event_path']) in train_paths]
                         train_dataset._build_sample_index()
                         self.logger.info(f"CV mode: filtered to {len(train_dataset.recordings)} train recordings from file")
 
                     if getattr(data_cfg, 'val_recordings_file', None):
                         with open(data_cfg.val_recordings_file, 'r') as f:
                             val_paths = set(line.strip() for line in f if line.strip())
-                        val_dataset.recordings = [r for r in val_dataset.recordings if r['event_path'] in val_paths]
+                        val_dataset.recordings = [r for r in val_dataset.recordings if str(r['event_path']) in val_paths]
                         val_dataset._build_sample_index()
                         self.logger.info(f"CV mode: filtered to {len(val_dataset.recordings)} val recordings from file")
 
