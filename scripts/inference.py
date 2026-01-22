@@ -386,42 +386,70 @@ def visualize_3d_trajectory(
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
 
+    # Get input events for ground truth extraction
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+
+    # Handle different event shapes to get (T, H, W)
+    if events_np.ndim == 5:  # (T, B, C, H, W)
+        events_np = events_np[:, 0, :, :, :]  # Take first batch -> (T, C, H, W)
+    if events_np.ndim == 4:  # (T, C, H, W)
+        events_np = events_np.sum(axis=1)  # Sum channels -> (T, H, W)
+
+    T_input, H_input, W_input = events_np.shape
+
     # Process predictions to get spike locations over time
     pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
 
-    # Handle different shapes
+    # Handle different prediction shapes
     if pred_np.ndim == 5:  # (T, B, C, H, W)
         pred_np = pred_np[:, 0, :, :, :]  # Take first batch
     if pred_np.ndim == 4:  # (T, C, H, W)
         pred_np = pred_np.sum(axis=1)  # Sum channels -> (T, H, W)
 
-    T, H, W = pred_np.shape
+    T_pred, H_pred, W_pred = pred_np.shape
 
-    # Extract prediction coordinates (time, y, x)
+    # Scale factors from prediction space to input space
+    scale_y = H_input / H_pred
+    scale_x = W_input / W_pred
+
+    # Extract prediction coordinates and SCALE to input space
     pred_coords = []
-    for t in range(T):
+    for t in range(T_pred):
         ys, xs = np.where(pred_np[t] > 0)
         for y, x in zip(ys, xs):
-            pred_coords.append([x, y, t])
+            # Scale coordinates to input space
+            x_scaled = x * scale_x
+            y_scaled = y * scale_y
+            pred_coords.append([x_scaled, y_scaled, t])
     pred_coords = np.array(pred_coords) if pred_coords else np.empty((0, 3))
 
-    # Extract ground truth coordinates
+    # Extract ground truth from INPUT EVENTS filtered by label mask
+    # This gives actual temporal trajectory, not static walls
     gt_coords = []
     if label is not None:
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
 
-        if label_np.ndim == 2:  # Static mask (H, W) - replicate across time
-            ys, xs = np.where(label_np > 0)
-            for y, x in zip(ys, xs):
-                # Spread across all timesteps
-                for t in range(T):
+        # Create a mask for the input space
+        if label_np.ndim == 2:  # Static mask (H, W)
+            # Use input events where the label mask indicates satellite presence
+            for t in range(T_input):
+                # Find where events occur AND label is positive
+                event_frame = np.abs(events_np[t])  # Get event activity at timestep t
+                # Mask events by label
+                masked_events = event_frame * label_np
+                # Get coordinates where there are events in labeled regions
+                ys, xs = np.where(masked_events > 0)
+                for y, x in zip(ys, xs):
                     gt_coords.append([x, y, t])
-        elif label_np.ndim == 3:  # (T, H, W)
-            for t in range(min(T, label_np.shape[0])):
+        elif label_np.ndim == 3:  # (T, H, W) temporal labels
+            for t in range(min(T_input, label_np.shape[0])):
                 ys, xs = np.where(label_np[t] > 0)
                 for y, x in zip(ys, xs):
                     gt_coords.append([x, y, t])
     gt_coords = np.array(gt_coords) if gt_coords else np.empty((0, 3))
+
+    # Use input space dimensions for plotting
+    T, H, W = T_input, H_input, W_input
 
     # Create figure with 3D plot and 2D overview inset
     fig = plt.figure(figsize=(14, 10))
