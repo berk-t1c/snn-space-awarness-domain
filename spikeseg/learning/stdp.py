@@ -197,7 +197,7 @@ class STDPConfig:
         variant: STDP variant (MULTIPLICATIVE or ADDITIVE).
         convergence_threshold: Stop training when convergence metric < this.
         weight_init_mean: Mean for weight initialization. Default 0.8.
-        weight_init_std: Std for weight initialization. Default 0.05.
+        weight_init_std: Std for weight initialization. Default 0.01 (IGARSS 2023).
     
     Example:
         >>> config = STDPConfig(lr_plus=0.004, lr_minus=0.003)
@@ -210,8 +210,8 @@ class STDPConfig:
     variant: STDPVariant = STDPVariant.MULTIPLICATIVE
     convergence_threshold: float = 0.01
     weight_init_mean: float = 0.8
-    weight_init_std: float = 0.05
-    
+    weight_init_std: float = 0.01  # IGARSS 2023: 0.01
+
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
         _validate_positive_float(self.lr_plus, "lr_plus")
