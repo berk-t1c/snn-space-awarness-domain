@@ -1119,14 +1119,23 @@ class EBSSADataset(EventDataset):
             print(f"[EBSSADataset] Filtered {skipped} recordings with empty labels, {len(valid)} remaining")
         return valid
 
-    def _apply_split(self) -> None:
-        """Apply train/val/test split."""
+    def _apply_split(self, seed: int = 42) -> None:
+        """Apply train/val/test split with shuffle.
+
+        Shuffles recordings before splitting to ensure train/val sets
+        contain diverse samples. Uses fixed seed for reproducibility.
+        """
         if self.split == "all":
             return
-        
+
+        # Shuffle recordings before split (with fixed seed for reproducibility)
+        import random
+        rng = random.Random(seed)
+        rng.shuffle(self.recordings)
+
         n = len(self.recordings)
         n_train = int(n * self.train_ratio)
-        
+
         if self.split == "train":
             self.recordings = self.recordings[:n_train]
         elif self.split in ["val", "test"]:
