@@ -701,6 +701,7 @@ def evaluate_objects(
     device: torch.device,
     hulk_decoder: HULKDecoder,
     spatial_tolerance: float = 1.0,
+    min_cluster_size: int = 1,
 ) -> Dict[str, float]:
     """
     Evaluate model using OBJECT-LEVEL centroid matching (paper methodology).
@@ -720,6 +721,8 @@ def evaluate_objects(
         device: Target device
         hulk_decoder: HULK decoder for spatial reconstruction
         spatial_tolerance: Max distance for centroid match (default 1 pixel)
+        min_cluster_size: Minimum pixels in classification space for a detection (default 1)
+                          Increase to filter out small noise clusters
 
     Returns:
         Dictionary with object-level metrics
@@ -733,6 +736,7 @@ def evaluate_objects(
 
     logger.info(f"Evaluating with OBJECT-LEVEL trajectory matching...")
     logger.info(f"  Spatial tolerance: {spatial_tolerance} pixel(s)")
+    logger.info(f"  Min cluster size: {min_cluster_size} pixel(s) in classification space")
     logger.info(f"  Mode: Detection must be within tolerance of ANY point on GT trajectory")
 
     for batch_idx, (x, labels) in enumerate(dataloader):
@@ -822,11 +826,12 @@ def evaluate_objects(
                     # Find connected components
                     labeled_array, num_features = ndimage.label(spike_mask)
 
-                    # Extract centroid for each connected component
+                    # Extract centroid for each connected component (filter by min size)
                     det_centroids = []
                     for i in range(1, num_features + 1):
                         coords = np.where(labeled_array == i)
-                        if len(coords[0]) > 0:
+                        cluster_size = len(coords[0])
+                        if cluster_size >= min_cluster_size:
                             # Centroid in classification space, then scale to pixel space
                             cy = coords[0].mean() * scale_factor_y
                             cx = coords[1].mean() * scale_factor_x
@@ -1105,6 +1110,13 @@ def main():
         action='store_true',
         help='Use object-level centroid matching (paper methodology) instead of pixel-level'
     )
+    parser.add_argument(
+        '--min-cluster-size',
+        type=int,
+        default=1,
+        help='Minimum cluster size in classification space to count as detection (default: 1). '
+             'Increase to filter out small noise detections (e.g., 3-5).'
+    )
 
     args = parser.parse_args()
 
@@ -1165,7 +1177,8 @@ def main():
         metrics = evaluate_objects(
             model, dataloader, device,
             hulk_decoder=hulk_decoder,
-            spatial_tolerance=float(args.spatial_tolerance)
+            spatial_tolerance=float(args.spatial_tolerance),
+            min_cluster_size=args.min_cluster_size
         )
 
         # Print object-level results
