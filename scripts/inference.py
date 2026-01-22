@@ -376,162 +376,114 @@ def visualize_3d_trajectory(
     title: str = "Satellite Detection"
 ):
     """
-    3D visualization like in the paper: X, Y, Time axes.
+    3D visualization exactly like the IGARSS paper: X, Y, Time axes.
 
-    Shows ground truth (cyan) and network output (red) trajectories.
-
-    Args:
-        events: Input events (T, C, H, W) or (T, B, C, H, W)
-        predictions: Model output spikes (T, B, C, H, W) or (T, C, H, W)
-        label: Ground truth mask (H, W) or (T, H, W)
-        output_path: Path to save figure
-        title: Figure title
+    Paper style:
+    - Black background
+    - Ground Truth: cyan dots
+    - Network Output: red + markers
+    - Time axis vertical, X/Y horizontal
     """
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
 
-    # Get input events for ground truth extraction
+    # Get input events
     events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
-
-    # Handle different event shapes to get (T, H, W)
     if events_np.ndim == 5:  # (T, B, C, H, W)
-        events_np = events_np[:, 0, :, :, :]  # Take first batch -> (T, C, H, W)
+        events_np = events_np[:, 0, :, :, :]
     if events_np.ndim == 4:  # (T, C, H, W)
-        events_np = events_np.sum(axis=1)  # Sum channels -> (T, H, W)
+        events_np = events_np.sum(axis=1)  # -> (T, H, W)
 
     T_input, H_input, W_input = events_np.shape
 
-    # Process predictions to get spike locations over time
+    # Get predictions
     pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
-
-    # Handle different prediction shapes
-    if pred_np.ndim == 5:  # (T, B, C, H, W)
-        pred_np = pred_np[:, 0, :, :, :]  # Take first batch
-    if pred_np.ndim == 4:  # (T, C, H, W)
-        pred_np = pred_np.sum(axis=1)  # Sum channels -> (T, H, W)
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)  # -> (T, H, W)
 
     T_pred, H_pred, W_pred = pred_np.shape
 
-    # Scale factors from prediction space to input space
+    # Scale and offset for predictions
     scale_y = H_input / H_pred
     scale_x = W_input / W_pred
+    offset = 12  # Convolution receptive field offset
 
-    # Offset to account for receptive field of convolutions
-    # Conv1(k=5) + Conv2(k=5) + Conv3(k=7) = total ~12 pixel offset
-    offset = 12
-
-    # Extract prediction coordinates and SCALE to input space
-    pred_coords = []
+    # Extract PREDICTION coordinates (Network Output)
+    pred_x, pred_y, pred_t = [], [], []
     for t in range(T_pred):
         ys, xs = np.where(pred_np[t] > 0)
         for y, x in zip(ys, xs):
-            # Scale coordinates to input space and add offset
-            x_scaled = x * scale_x + offset
-            y_scaled = y * scale_y + offset
-            pred_coords.append([x_scaled, y_scaled, t])
-    pred_coords = np.array(pred_coords) if pred_coords else np.empty((0, 3))
+            pred_x.append(x * scale_x + offset)
+            pred_y.append(y * scale_y + offset)
+            pred_t.append(t)
 
-    # Extract ground truth from INPUT EVENTS filtered by label mask
-    # This gives actual temporal trajectory, not static walls
-    gt_coords = []
+    # Extract GROUND TRUTH from events filtered by label
+    gt_x, gt_y, gt_t = [], [], []
     if label is not None:
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
-
-        # Create a mask for the input space
-        if label_np.ndim == 2:  # Static mask (H, W)
-            # Use input events where the label mask indicates satellite presence
+        if label_np.ndim == 2:
             for t in range(T_input):
-                # Find where events occur AND label is positive
-                event_frame = np.abs(events_np[t])  # Get event activity at timestep t
-                # Mask events by label
-                masked_events = event_frame * label_np
-                # Get coordinates where there are events in labeled regions
-                ys, xs = np.where(masked_events > 0)
+                masked = np.abs(events_np[t]) * label_np
+                ys, xs = np.where(masked > 0)
                 for y, x in zip(ys, xs):
-                    gt_coords.append([x, y, t])
-        elif label_np.ndim == 3:  # (T, H, W) temporal labels
-            for t in range(min(T_input, label_np.shape[0])):
-                ys, xs = np.where(label_np[t] > 0)
-                for y, x in zip(ys, xs):
-                    gt_coords.append([x, y, t])
-    gt_coords = np.array(gt_coords) if gt_coords else np.empty((0, 3))
+                    gt_x.append(x)
+                    gt_y.append(y)
+                    gt_t.append(t)
 
-    # Use input space dimensions for plotting
-    T, H, W = T_input, H_input, W_input
-
-    # Create figure with 3D plot and 2D overview inset
-    fig = plt.figure(figsize=(14, 10))
-
-    # Main 3D plot
+    # Create figure with black background (paper style)
+    plt.style.use('dark_background')
+    fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(111, projection='3d')
+    ax.set_facecolor('black')
 
-    # Plot ground truth (cyan squares)
-    if len(gt_coords) > 0:
-        # Subsample if too many points
-        if len(gt_coords) > 5000:
-            idx = np.random.choice(len(gt_coords), 5000, replace=False)
-            gt_plot = gt_coords[idx]
-        else:
-            gt_plot = gt_coords
-        ax.scatter(gt_plot[:, 0], gt_plot[:, 1], gt_plot[:, 2],
-                   c='cyan', marker='s', s=8, alpha=0.6, label='Ground Truth')
+    # Plot Ground Truth (cyan) - larger markers
+    if gt_x:
+        ax.scatter(gt_x, gt_t, gt_y, c='cyan', marker='o', s=30, alpha=0.7,
+                   label='Ground Truth', depthshade=False)
 
-    # Plot predictions (red +)
-    if len(pred_coords) > 0:
-        # Subsample if too many points
-        if len(pred_coords) > 5000:
-            idx = np.random.choice(len(pred_coords), 5000, replace=False)
-            pred_plot = pred_coords[idx]
-        else:
-            pred_plot = pred_coords
-        ax.scatter(pred_plot[:, 0], pred_plot[:, 1], pred_plot[:, 2],
-                   c='red', marker='+', s=20, alpha=0.8, label='Network Output')
+    # Plot Network Output (red +) - on top
+    if pred_x:
+        ax.scatter(pred_x, pred_t, pred_y, c='red', marker='+', s=80,
+                   linewidths=2, alpha=0.9, label='Network Output', depthshade=False)
 
-    # Labels and styling
-    ax.set_xlabel('X', fontsize=12, labelpad=10)
-    ax.set_ylabel('Y', fontsize=12, labelpad=10)
-    ax.set_zlabel('Time', fontsize=12, labelpad=10)
-    ax.set_xlim(0, W)
-    ax.set_ylim(0, H)
-    ax.set_zlim(0, T)
+    # Axis labels (paper style: X, Time, Y)
+    ax.set_xlabel('X (pixels)', fontsize=14, color='white', labelpad=10)
+    ax.set_ylabel('Time (steps)', fontsize=14, color='white', labelpad=10)
+    ax.set_zlabel('Y (pixels)', fontsize=14, color='white', labelpad=10)
 
-    # Invert Y axis to match image coordinates
-    ax.invert_yaxis()
+    # Set axis limits
+    ax.set_xlim(0, W_input)
+    ax.set_ylim(0, T_input)
+    ax.set_zlim(0, H_input)
 
-    ax.legend(loc='upper left', fontsize=10)
-    ax.set_title(title, fontsize=14, pad=20)
+    # Viewing angle (similar to paper)
+    ax.view_init(elev=15, azim=45)
 
-    # Set viewing angle similar to paper
-    ax.view_init(elev=20, azim=-60)
+    # Legend
+    ax.legend(loc='upper left', fontsize=12, facecolor='black', edgecolor='white')
 
-    # Add 2D overview inset
-    inset_ax = fig.add_axes([0.7, 0.1, 0.25, 0.25])
+    # Title
+    ax.set_title(title, fontsize=16, color='white', pad=20)
 
-    # Create 2D overview (sum over time)
-    if len(gt_coords) > 0:
-        inset_ax.scatter(gt_coords[:, 0], gt_coords[:, 1],
-                        c='cyan', marker='s', s=1, alpha=0.3)
-    if len(pred_coords) > 0:
-        inset_ax.scatter(pred_coords[:, 0], pred_coords[:, 1],
-                        c='red', marker='+', s=2, alpha=0.5)
-
-    inset_ax.set_xlim(0, W)
-    inset_ax.set_ylim(H, 0)  # Invert Y
-    inset_ax.set_title('Overview', fontsize=9)
-    inset_ax.set_xlabel('X', fontsize=8)
-    inset_ax.set_ylabel('Y', fontsize=8)
-    inset_ax.tick_params(labelsize=7)
+    # Grid styling
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if output_path:
-        plt.savefig(output_path, dpi=150, bbox_inches='tight',
-                    facecolor='white', edgecolor='none')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight',
+                    facecolor='black', edgecolor='none')
         print(f"Saved 3D visualization: {output_path}")
     else:
         plt.show()
 
     plt.close()
+    plt.style.use('default')  # Reset style
 
     return fig
 
