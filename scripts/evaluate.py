@@ -690,12 +690,27 @@ def load_model(
 
     model.load_state_dict(filtered_state_dict, strict=False)
 
-    # Note: The model is already correctly initialized with leak values from the config.
-    # LayerConfig.leak contains absolute leak values (e.g., 0.09 for 90% of threshold=0.1)
-    # SpikingEncoderLayer converts to leak_factor = leak/threshold, then LIFNeuron
-    # converts back to leak = leak_factor * threshold, so the neuron.leak buffer
-    # is already set to the correct absolute leak value.
-    # No need to overwrite - the model respects the checkpoint config.
+    # CRITICAL: If inference_threshold is specified, we must set it AFTER load_state_dict
+    # because the checkpoint contains conv*.neuron.threshold as tensors that override
+    # the values we set during model construction.
+    if inference_threshold is not None:
+        logger.info(f"Setting inference thresholds AFTER load_state_dict...")
+        # Compute leak values (preserve ratio from original config)
+        # Original: thresholds=[0.1, 0.1, 0.1], leaks=[0.09, 0.01, 0.0] -> ratios=[0.9, 0.1, 0.0]
+        leak_ratios = [0.9, 0.1, 0.0]  # From IGARSS 2023 config
+        new_leaks = [inference_threshold * r for r in leak_ratios]
+
+        # Set thresholds and leaks on each layer
+        for i, (layer_name, leak_val) in enumerate([
+            ('conv1', new_leaks[0]),
+            ('conv2', new_leaks[1]),
+            ('conv3', new_leaks[2])
+        ]):
+            layer = getattr(model, layer_name)
+            if hasattr(layer, 'neuron'):
+                layer.neuron.threshold.fill_(inference_threshold)
+                layer.neuron.leak.fill_(leak_val)
+                logger.info(f"  {layer_name}: threshold={inference_threshold}, leak={leak_val:.4f}")
 
     model.to(device)
     model.eval()
