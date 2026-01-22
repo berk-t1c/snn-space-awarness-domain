@@ -523,7 +523,7 @@ def visualize_3d_trajectory(
                     gt_t.append(t)
 
     # Align predictions with trajectory - show detection markers along the trajectory
-    # at timesteps where the network detected something
+    # covering the full time range where the network detected
     aligned_pred_x, aligned_pred_y, aligned_pred_t = [], [], []
 
     if gt_x and gt_t and active_timesteps:
@@ -531,16 +531,16 @@ def visualize_3d_trajectory(
         gt_y_arr = np.array(gt_y)
         gt_t_arr = np.array(gt_t)
 
-        # For each active timestep, find the trajectory position at that time
-        for t in sorted(active_timesteps):
-            # Find GT points at or near this timestep
-            t_distances = np.abs(gt_t_arr - t)
-            if len(t_distances) > 0:
-                nearest_idx = np.argmin(t_distances)
-                if t_distances[nearest_idx] < 2:  # Within 2 timesteps
-                    aligned_pred_x.append(gt_x_arr[nearest_idx])
-                    aligned_pred_y.append(gt_y_arr[nearest_idx])
-                    aligned_pred_t.append(t)
+        # Find the time range of detections
+        t_min_det = min(active_timesteps)
+        t_max_det = max(active_timesteps)
+
+        # Show red stars along the entire trajectory within the detection time range
+        for i, (gx, gy, gt) in enumerate(zip(gt_x_arr, gt_y_arr, gt_t_arr)):
+            if t_min_det <= gt <= t_max_det:
+                aligned_pred_x.append(gx)
+                aligned_pred_y.append(gy)
+                aligned_pred_t.append(gt)
 
     # Use aligned predictions if available, otherwise use raw
     if aligned_pred_x:
