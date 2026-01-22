@@ -103,9 +103,9 @@ data:
   num_workers: 0            # Single-threaded to avoid OOM with spatial filtering
   pin_memory: true          # Pin memory for faster GPU transfer
   
-  # Event/spike parameters (SpikeSEG: 20 timesteps for events)
+  # Event/spike parameters (IGARSS 2023: 10 timesteps)
   timestep_ms: 100.0        # Simulation timestep in milliseconds
-  n_timesteps: 20           # Number of timesteps per sample (10 event + 10 propagation)
+  n_timesteps: 10           # Number of timesteps per sample (matching paper's "10 steps")
   input_height: 128         # Input height
   input_width: 128          # Input width
   input_channels: 2         # Input channels (2 for ON/OFF polarity)
@@ -121,13 +121,13 @@ data:
   windows_per_recording: 1   # One sample per recording (object time window)
   window_overlap: 0.0        # Not used with windows_per_recording=1
   
-  # Data augmentation (safe options - no cropping to preserve edge satellites)
+  # Data augmentation (minimal - data is already noisy)
   augmentation:
     enabled: true
     flip_horizontal: true   # Safe: satellites can appear on either side
-    flip_polarity: true     # Safe: doesn't change spatial location
-    drop_rate: 0.1          # Safe: randomly drop 10% of events
-    noise_rate: 0.05        # Safe: add 5% noise events
+    flip_polarity: false    # Disabled: might confuse ON/OFF learning with fixed DoG
+    drop_rate: 0.0          # Disabled: don't drop sparse events
+    noise_rate: 0.0         # Disabled: EBSSA data is already noisy
     # random_crop: null     # DISABLED: would cut off edge satellites
 
 # -----------------------------------------------------------------------------
