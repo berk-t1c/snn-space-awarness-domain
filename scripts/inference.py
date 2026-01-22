@@ -276,6 +276,10 @@ def detect_satellites(
             scale_y = input_h / class_h
             scale_x = input_w / class_w
 
+            # Offset to account for receptive field of convolutions
+            # Conv1(k=5) + Conv2(k=5) + Conv3(k=7) = total ~12 pixel offset
+            offset = 12
+
             # Find connected components
             binary_map = (spike_map > 0).astype(np.uint8)
             labeled_array, num_features = ndimage.label(binary_map)
@@ -292,11 +296,11 @@ def detect_satellites(
                 x_min_class = coords[1].min()
                 x_max_class = coords[1].max()
 
-                # Scale to input space
-                x_min = x_min_class * scale_x
-                x_max = (x_max_class + 1) * scale_x
-                y_min = y_min_class * scale_y
-                y_max = (y_max_class + 1) * scale_y
+                # Scale to input space and add offset
+                x_min = x_min_class * scale_x + offset
+                x_max = (x_max_class + 1) * scale_x + offset
+                y_min = y_min_class * scale_y + offset
+                y_max = (y_max_class + 1) * scale_y + offset
 
                 # Confidence based on spike density
                 cluster_spikes = spike_map[coords].sum()
@@ -412,14 +416,18 @@ def visualize_3d_trajectory(
     scale_y = H_input / H_pred
     scale_x = W_input / W_pred
 
+    # Offset to account for receptive field of convolutions
+    # Conv1(k=5) + Conv2(k=5) + Conv3(k=7) = total ~12 pixel offset
+    offset = 12
+
     # Extract prediction coordinates and SCALE to input space
     pred_coords = []
     for t in range(T_pred):
         ys, xs = np.where(pred_np[t] > 0)
         for y, x in zip(ys, xs):
-            # Scale coordinates to input space
-            x_scaled = x * scale_x
-            y_scaled = y * scale_y
+            # Scale coordinates to input space and add offset
+            x_scaled = x * scale_x + offset
+            y_scaled = y * scale_y + offset
             pred_coords.append([x_scaled, y_scaled, t])
     pred_coords = np.array(pred_coords) if pred_coords else np.empty((0, 3))
 
