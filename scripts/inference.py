@@ -600,8 +600,8 @@ def main():
             if args.visualize_3d and i < 10:  # 3D paper-style visualization
                 visualize_3d_trajectory(
                     x, raw_spikes, label,
-                    output_path=f'detection_3d_{i:03d}.png',
-                    title=f'Sample {i}: Satellite Detection'
+                    output_path=f'trajectory_3d_{i:03d}.png',
+                    title=f'Sample {i}: Satellite Trajectory'
                 )
 
             if (i + 1) % 10 == 0:
