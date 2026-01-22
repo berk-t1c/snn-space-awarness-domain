@@ -433,13 +433,13 @@ def visualize_3d_trajectory(
 
     if trajectory is not None and 'x' in trajectory and 'y' in trajectory:
         # Use actual object trajectory from EBSSA data
-        traj_x = np.asarray(trajectory['x']).flatten()
-        traj_y = np.asarray(trajectory['y']).flatten()
+        traj_x = np.asarray(trajectory['x']).flatten().astype(float)
+        traj_y = np.asarray(trajectory['y']).flatten().astype(float)
 
         # Normalize time to [0, T_input] range
-        if 't' in trajectory and len(trajectory['t']) > 0:
-            traj_t = np.asarray(trajectory['t']).flatten()
-            t_min, t_max = traj_t.min(), traj_t.max()
+        if 't' in trajectory and trajectory['t'] is not None and len(trajectory['t']) > 0:
+            traj_t = np.asarray(trajectory['t']).flatten().astype(float)
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
             if t_max > t_min:
                 traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
             else:
@@ -614,7 +614,7 @@ def main():
                 visualize_3d_trajectory(
                     x, raw_spikes, label,
                     trajectory=trajectory,
-                    output_path=f'trajectory_3d_{i:03d}.png',
+                    output_path=f'figure4_sample_{i:03d}.png',
                     title=f'Sample {i}: Satellite Trajectory'
                 )
 
