@@ -96,7 +96,7 @@ convergence:
 # -----------------------------------------------------------------------------
 data:
   dataset: "ebssa"          # Dataset name
-  data_root: "../ebssa-data-utah/ebssa"  # Data directory (contains 'Labelled Data' folder)
+  data_root: "/home/user/ebssa-data-utah/ebssa"  # Data directory (contains 'Labelled Data' folder)
   sensor: "all"             # Use ALL sensors (ATIS + DAVIS) for more data
   include_unlabelled: false  # Disabled - unlabelled data has incompatible format
   batch_size: 1             # Batch size (typically 1 for online STDP)
