@@ -122,8 +122,8 @@ def run_training(fold_num: int, train_file: Path, val_file: Path, config_path: s
         "--config", config_path,
         "--train-recordings", str(train_file),
         "--val-recordings", str(val_file),
-        "--output-dir", str(output_dir),
-        "--experiment-name", f"fold_{fold_num:02d}"
+        "--output", str(output_dir),
+        "--name", f"fold_{fold_num:02d}"
     ]
 
     print(f"\n{'='*60}")
