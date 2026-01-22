@@ -991,7 +991,11 @@ class EBSSADataset(EventDataset):
         
         # Find recordings
         self.recordings = self._find_recordings()
-        
+
+        # Filter out recordings with invalid/empty timestamps (data quality issue)
+        if self.use_labels:
+            self.recordings = self._filter_valid_recordings()
+
         # Apply split
         self._apply_split()
         
@@ -1068,7 +1072,51 @@ class EBSSADataset(EventDataset):
                 })
         
         return recordings
-    
+
+    def _filter_valid_recordings(self) -> List[Dict[str, Any]]:
+        """Filter out recordings with empty/invalid timestamps.
+
+        Some EBSSA recordings have Obj.x and Obj.y but empty Obj.ts,
+        making it impossible to correctly filter labels to time windows.
+        These recordings cause empty masks and pollute training.
+        """
+        import scipy.io as sio
+
+        def unwrap_field(field):
+            """Extract data from potentially nested 0-d object arrays."""
+            if field is None:
+                return None
+            if hasattr(field, 'shape') and field.shape == () and hasattr(field, 'dtype') and field.dtype == object:
+                return unwrap_field(field.item())
+            if hasattr(field, 'flatten'):
+                return field.flatten()
+            return field
+
+        valid = []
+        skipped = 0
+        for rec in self.recordings:
+            try:
+                mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                if 'Obj' not in mat:
+                    skipped += 1
+                    continue
+                obj = mat['Obj']
+                if hasattr(obj, 'dtype') and obj.dtype.names and 'ts' in obj.dtype.names:
+                    obj_ts = unwrap_field(obj['ts'])
+                    ts_arr = np.asarray(obj_ts).flatten() if obj_ts is not None else np.array([])
+                    if len(ts_arr) > 0:
+                        valid.append(rec)
+                    else:
+                        skipped += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+
+        if skipped > 0:
+            print(f"[EBSSADataset] Filtered {skipped} recordings with empty/invalid timestamps, {len(valid)} remaining")
+        return valid
+
     def _apply_split(self) -> None:
         """Apply train/val/test split."""
         if self.split == "all":
