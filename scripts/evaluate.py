@@ -695,6 +695,184 @@ def load_model(
     return model, hulk_decoder
 
 
+def evaluate_volume_based(
+    model: SpikeSEGEncoder,
+    dataloader: DataLoader,
+    device: torch.device,
+    spatial_tolerance: float = 10.0,
+    time_slice_ms: float = 10.0,
+) -> Dict[str, float]:
+    """
+    Evaluate model using VOLUME-BASED event density (Afshar et al. 2019 / IGARSS 2023).
+
+    This is the ORIGINAL paper methodology from Afshar et al.:
+    "If, for any spatio-temporal volume, the event density is above the global
+    event density of the full recording, then the volume is activated as positive."
+
+    Algorithm:
+    1. For each sample, compute global spike density (spikes/pixel/timestep)
+    2. For each timestep, create spatio-temporal volume slices:
+       - TRUE volume: within radius r of GT trajectory
+       - FALSE volume: outside radius r
+    3. For each volume slice:
+       - POSITIVE if local density > global density
+       - NEGATIVE if local density <= global density
+    4. Metrics:
+       - TP = TRUE & POSITIVE (detected where object is)
+       - TN = FALSE & NEGATIVE (no detection where no object)
+       - FP = FALSE & POSITIVE (detected where no object)
+       - FN = TRUE & NEGATIVE (missed where object is)
+
+    Args:
+        model: Trained model
+        dataloader: Test data loader
+        device: Target device
+        spatial_tolerance: Radius r for TRUE/FALSE volume boundary (default 10 pixels)
+        time_slice_ms: Time slice duration (default 10ms per Afshar paper)
+
+    Returns:
+        Dictionary with volume-based metrics
+    """
+    model.eval()
+
+    # Accumulators for volume-based metrics
+    total_tp_volumes = 0
+    total_tn_volumes = 0
+    total_fp_volumes = 0
+    total_fn_volumes = 0
+    n_samples = 0
+
+    logger.info(f"Evaluating with VOLUME-BASED event density (Afshar et al. methodology)...")
+    logger.info(f"  Spatial tolerance (radius r): {spatial_tolerance} pixel(s)")
+    logger.info(f"  Time slice: {time_slice_ms}ms")
+
+    for batch_idx, (x, labels) in enumerate(dataloader):
+        labels = labels.to(device)
+
+        # Ensure correct shape: (B, T, C, H, W)
+        if x.dim() == 4:
+            x = x.unsqueeze(0)
+        batch_size = x.shape[0]
+
+        # Convert (B, T, C, H, W) -> (T, B, C, H, W) for encoder
+        if x.dim() == 5:
+            x = x.permute(1, 0, 2, 3, 4)
+
+        n_timesteps = x.shape[0]
+        x = x.to(device)
+
+        with torch.no_grad():
+            output = model(x)
+
+            for b in range(batch_size):
+                # Get classification spikes: (T, C, H, W)
+                class_spikes = output.classification_spikes[:, b]
+
+                # Get GT label
+                label_2d = labels[b] if labels.dim() == 3 else labels
+
+                # Create distance map from GT trajectory
+                # GT mask is 1 where satellite is, 0 elsewhere
+                gt_mask = (label_2d > 0).cpu().numpy().astype(np.float32)
+
+                if gt_mask.sum() == 0:
+                    # No GT object - entire volume is FALSE
+                    # Any spikes are FP, no spikes are TN
+                    total_spikes = class_spikes.sum().item()
+                    if total_spikes > 0:
+                        total_fp_volumes += 1  # Detected in empty frame
+                    else:
+                        total_tn_volumes += 1  # Correctly no detection
+                    n_samples += 1
+                    continue
+
+                # Compute distance transform from GT (distance to nearest GT pixel)
+                from scipy.ndimage import distance_transform_edt
+                distance_map = distance_transform_edt(1 - gt_mask)
+
+                # Create TRUE/FALSE masks
+                true_mask = distance_map <= spatial_tolerance  # Within r of GT
+                false_mask = ~true_mask
+
+                # Compute global spike density for this sample
+                # Sum spikes over all timesteps and spatial locations
+                spike_map = class_spikes.sum(dim=(0, 1)).cpu().numpy()  # (H, W)
+
+                # Scale spike map to label size if needed
+                if spike_map.shape != gt_mask.shape:
+                    # Upscale spike map
+                    scale_y = gt_mask.shape[0] / spike_map.shape[0]
+                    scale_x = gt_mask.shape[1] / spike_map.shape[1]
+                    from scipy.ndimage import zoom
+                    spike_map = zoom(spike_map, (scale_y, scale_x), order=0)
+
+                total_spikes = spike_map.sum()
+                total_pixels = spike_map.size
+                global_density = total_spikes / total_pixels if total_pixels > 0 else 0
+
+                # Compute density in TRUE and FALSE regions
+                true_spikes = spike_map[true_mask].sum() if true_mask.any() else 0
+                true_pixels = true_mask.sum()
+                true_density = true_spikes / true_pixels if true_pixels > 0 else 0
+
+                false_spikes = spike_map[false_mask].sum() if false_mask.any() else 0
+                false_pixels = false_mask.sum()
+                false_density = false_spikes / false_pixels if false_pixels > 0 else 0
+
+                # Volume-based classification:
+                # TRUE region is POSITIVE if density > global mean
+                # FALSE region is POSITIVE if density > global mean
+                true_positive = true_density > global_density
+                false_positive = false_density > global_density
+
+                # Count volumes (each sample contributes 1 TRUE volume and 1 FALSE volume)
+                if true_positive:
+                    total_tp_volumes += 1  # Correctly detected object region
+                else:
+                    total_fn_volumes += 1  # Missed object region
+
+                if false_positive:
+                    total_fp_volumes += 1  # False alarm in background
+                else:
+                    total_tn_volumes += 1  # Correctly quiet background
+
+                n_samples += 1
+
+                # Debug output for first few samples
+                if batch_idx < 3:
+                    logger.info(f"  Sample {batch_idx}: global_density={global_density:.4f}, "
+                               f"true_density={true_density:.4f}, false_density={false_density:.4f}")
+                    logger.info(f"    TRUE region: {'POSITIVE (TP)' if true_positive else 'NEGATIVE (FN)'}")
+                    logger.info(f"    FALSE region: {'POSITIVE (FP)' if false_positive else 'NEGATIVE (TN)'}")
+
+    # Compute final metrics
+    eps = 1e-7
+    sensitivity = total_tp_volumes / (total_tp_volumes + total_fn_volumes + eps)
+    specificity = total_tn_volumes / (total_tn_volumes + total_fp_volumes + eps)
+    informedness = sensitivity + specificity - 1.0
+
+    precision = total_tp_volumes / (total_tp_volumes + total_fp_volumes + eps)
+    f1 = 2 * precision * sensitivity / (precision + sensitivity + eps)
+
+    logger.info(f"")
+    logger.info(f"  Volume counts: TP={total_tp_volumes}, TN={total_tn_volumes}, "
+               f"FP={total_fp_volumes}, FN={total_fn_volumes}")
+
+    return {
+        'n_samples': n_samples,
+        'total_tp': total_tp_volumes,
+        'total_tn': total_tn_volumes,
+        'total_fp': total_fp_volumes,
+        'total_fn': total_fn_volumes,
+        'sensitivity': sensitivity,
+        'specificity': specificity,
+        'informedness': informedness,
+        'precision': precision,
+        'f1': f1,
+        'spatial_tolerance': spatial_tolerance
+    }
+
+
 def evaluate_objects(
     model: SpikeSEGEncoder,
     dataloader: DataLoader,
@@ -1139,6 +1317,12 @@ def main():
         help='Minimum cluster size in classification space to count as detection (default: 1). '
              'Increase to filter out small noise detections (e.g., 3-5).'
     )
+    parser.add_argument(
+        '--volume-based',
+        action='store_true',
+        help='Use volume-based event density evaluation (Afshar et al. 2019 / IGARSS 2023 methodology). '
+             'This is the ORIGINAL paper methodology that achieved 89.1%% informedness.'
+    )
 
     args = parser.parse_args()
 
@@ -1185,13 +1369,37 @@ def main():
 
     # Evaluate
     logger.info("=" * 60)
-    if args.object_level:
-        logger.info("  SpikeSEG OBJECT-LEVEL Evaluation (Paper Methodology)")
+    if args.volume_based:
+        logger.info("  SpikeSEG VOLUME-BASED Evaluation (Afshar/IGARSS 2023 Methodology)")
+    elif args.object_level:
+        logger.info("  SpikeSEG OBJECT-LEVEL Evaluation (Centroid Matching)")
     else:
         logger.info("  SpikeSEG Pixel-Level Evaluation with HULK-SMASH")
     logger.info("=" * 60)
 
-    if args.object_level:
+    if args.volume_based:
+        # Volume-based evaluation (original paper methodology)
+        metrics = evaluate_volume_based(
+            model, dataloader, device,
+            spatial_tolerance=float(args.spatial_tolerance)
+        )
+
+        # Print volume-based results
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("  VOLUME-BASED Results (Afshar et al. / IGARSS 2023)")
+        logger.info("=" * 60)
+        logger.info(f"  Samples:        {metrics['n_samples']}")
+        logger.info(f"  TP/TN/FP/FN:    {metrics['total_tp']}/{metrics['total_tn']}/{metrics['total_fp']}/{metrics['total_fn']}")
+        logger.info("")
+        logger.info(f"  Sensitivity:    {metrics['sensitivity']*100:.1f}%")
+        logger.info(f"  Specificity:    {metrics['specificity']*100:.1f}%")
+        logger.info(f"  Informedness:   {metrics['informedness']*100:.1f}%  (paper: 89.1%)")
+        logger.info(f"  Precision:      {metrics['precision']*100:.1f}%")
+        logger.info(f"  F1 Score:       {metrics['f1']*100:.1f}%")
+        logger.info("=" * 60)
+
+    elif args.object_level:
         if hulk_decoder is None:
             logger.error("Object-level evaluation requires HULK decoder. Don't use --no-hulk.")
             return None
