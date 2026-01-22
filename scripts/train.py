@@ -2671,7 +2671,22 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Disable TensorBoard'
     )
-    
+
+    # Cross-validation support
+    parser.add_argument(
+        '--train-recordings',
+        type=str,
+        default=None,
+        help='File with training recording paths (for CV)'
+    )
+
+    parser.add_argument(
+        '--val-recordings',
+        type=str,
+        default=None,
+        help='File with validation recording paths (for CV)'
+    )
+
     return parser.parse_args()
 
 
