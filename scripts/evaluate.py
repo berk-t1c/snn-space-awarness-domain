@@ -734,6 +734,12 @@ def evaluate_objects(
     total_gt_objects = 0
     n_samples = 0
 
+    # Diagnostic counters to understand FP sources
+    samples_with_gt = 0
+    samples_without_gt = 0
+    detections_in_empty_frames = 0
+    detections_in_gt_frames = 0
+
     logger.info(f"Evaluating with OBJECT-LEVEL trajectory matching...")
     logger.info(f"  Spatial tolerance: {spatial_tolerance} pixel(s)")
     logger.info(f"  Min cluster size: {min_cluster_size} pixel(s) in classification space")
@@ -783,6 +789,9 @@ def evaluate_objects(
                 has_gt = len(gt_points) > 0
                 if has_gt:
                     total_gt_objects += 1
+                    samples_with_gt += 1
+                else:
+                    samples_without_gt += 1
 
                 if class_spikes.sum() == 0:
                     # No detections
@@ -838,6 +847,11 @@ def evaluate_objects(
                             det_centroids.append((cx, cy))  # (x, y) format
 
                     total_detections += len(det_centroids)
+                    # Track where detections are occurring
+                    if has_gt:
+                        detections_in_gt_frames += len(det_centroids)
+                    else:
+                        detections_in_empty_frames += len(det_centroids)
                 else:
                     det_centroids = []
 
@@ -888,6 +902,14 @@ def evaluate_objects(
     logger.info(f"  Total detections: {total_detections}")
     logger.info(f"  Total GT objects: {total_gt_objects}")
     logger.info(f"  Matched (TP): {total_tp}")
+
+    # Diagnostic: where are FPs coming from?
+    logger.info(f"")
+    logger.info(f"  --- FP Source Analysis ---")
+    logger.info(f"  Samples with GT (satellites): {samples_with_gt}")
+    logger.info(f"  Samples without GT (empty): {samples_without_gt}")
+    logger.info(f"  Detections in GT frames: {detections_in_gt_frames} (TP={total_tp}, FP in GT frames={detections_in_gt_frames - total_tp})")
+    logger.info(f"  Detections in empty frames: {detections_in_empty_frames} (all FP)")
 
     return {
         'n_samples': n_samples,
