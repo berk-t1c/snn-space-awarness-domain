@@ -699,7 +699,7 @@ def evaluate_volume_based(
     model: SpikeSEGEncoder,
     dataloader: DataLoader,
     device: torch.device,
-    spatial_tolerance: float = 10.0,
+    spatial_tolerance: float = 1.0,  # Paper: "one-pixel boundary" (IGARSS 2023)
     time_slice_ms: float = 10.0,
 ) -> Dict[str, float]:
     """
@@ -727,7 +727,7 @@ def evaluate_volume_based(
         model: Trained model
         dataloader: Test data loader
         device: Target device
-        spatial_tolerance: Radius r for TRUE/FALSE volume boundary (default 10 pixels)
+        spatial_tolerance: Radius r for TRUE/FALSE volume boundary (default 1 pixel per paper)
         time_slice_ms: Time slice duration (default 10ms per Afshar paper)
 
     Returns:
@@ -1282,8 +1282,8 @@ def main():
     parser.add_argument(
         '--spatial-tolerance',
         type=int,
-        default=10,
-        help='Spatial tolerance in pixels for TP (default: 10 - accounts for 4x scale from 32x32 class map)'
+        default=1,
+        help='Spatial tolerance in pixels for TP (default: 1 per IGARSS 2023 paper "one-pixel boundary")'
     )
     parser.add_argument(
         '--no-hulk',
