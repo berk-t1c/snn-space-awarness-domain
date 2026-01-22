@@ -203,7 +203,7 @@ class STDPParams:
     weight_min: float = 0.0
     weight_max: float = 1.0
     weight_init_mean: float = 0.8
-    weight_init_std: float = 0.05  # Kheradpisheh 2018: 0.05 for diversity
+    weight_init_std: float = 0.01  # IGARSS 2023: 0.01 for tight clustering
     use_soft_bounds: bool = True
     
     @classmethod
