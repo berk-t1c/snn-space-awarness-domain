@@ -432,31 +432,56 @@ def visualize_3d_trajectory(
     gt_x, gt_y, gt_t = [], [], []
 
     if trajectory is not None and 'x' in trajectory and 'y' in trajectory:
-        # Use actual object trajectory from EBSSA data
-        traj_x = np.asarray(trajectory['x']).flatten().astype(float)
-        traj_y = np.asarray(trajectory['y']).flatten().astype(float)
+        # Helper to extract flat numeric array from MATLAB data
+        def extract_array(arr):
+            if arr is None:
+                return None
+            arr = np.asarray(arr)
+            # Handle nested object arrays
+            if arr.dtype == object:
+                flat = []
+                for item in arr.flatten():
+                    if hasattr(item, '__iter__') and not isinstance(item, str):
+                        flat.extend(np.asarray(item).flatten().tolist())
+                    else:
+                        flat.append(float(item))
+                return np.array(flat, dtype=float)
+            return arr.flatten().astype(float)
 
-        # Normalize time to [0, T_input] range
-        if 't' in trajectory and trajectory['t'] is not None and len(trajectory['t']) > 0:
-            traj_t = np.asarray(trajectory['t']).flatten().astype(float)
-            t_min, t_max = float(traj_t.min()), float(traj_t.max())
-            if t_max > t_min:
-                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+        try:
+            traj_x = extract_array(trajectory['x'])
+            traj_y = extract_array(trajectory['y'])
+
+            if traj_x is None or traj_y is None or len(traj_x) == 0:
+                raise ValueError("Empty trajectory")
+
+            # Normalize time to [0, T_input] range
+            traj_t_data = trajectory.get('t')
+            if traj_t_data is not None:
+                traj_t = extract_array(traj_t_data)
+                if traj_t is not None and len(traj_t) > 0:
+                    t_min, t_max = float(traj_t.min()), float(traj_t.max())
+                    if t_max > t_min:
+                        traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+                    else:
+                        traj_t_norm = np.linspace(0, T_input - 1, len(traj_x))
+                else:
+                    traj_t_norm = np.linspace(0, T_input - 1, len(traj_x))
             else:
-                traj_t_norm = np.zeros_like(traj_t)
-        else:
-            # Linear time assumption
-            traj_t_norm = np.linspace(0, T_input - 1, len(traj_x))
+                traj_t_norm = np.linspace(0, T_input - 1, len(traj_x))
 
-        # Scale coordinates to output space (128x128)
-        scale_x_traj = (W_input - 1) / 240  # EBSSA sensor width
-        scale_y_traj = (H_input - 1) / 180  # EBSSA sensor height
+            # Scale coordinates to output space (128x128)
+            scale_x_traj = (W_input - 1) / 240  # EBSSA sensor width
+            scale_y_traj = (H_input - 1) / 180  # EBSSA sensor height
 
-        gt_x = list(traj_x * scale_x_traj)
-        gt_y = list(traj_y * scale_y_traj)
-        gt_t = list(traj_t_norm)
+            gt_x = list(traj_x * scale_x_traj)
+            gt_y = list(traj_y * scale_y_traj)
+            gt_t = list(traj_t_norm)
+        except Exception as e:
+            print(f"Warning: Could not parse trajectory: {e}")
+            # Fall back to label-based GT below
 
-    elif label is not None:
+    if not gt_x and label is not None:
         # Fallback: use events filtered by label
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
         if label_np.ndim == 2:
