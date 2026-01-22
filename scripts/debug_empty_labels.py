@@ -42,8 +42,14 @@ def main():
             # Get recording info
             rec_idx = i // dataset.windows_per_recording
             if rec_idx < len(dataset.recordings):
-                rec_path = dataset.recordings[rec_idx]
-                print(f"Sample {i}: sat_pixels=0, events={total_events}, recording={rec_path.name}")
+                rec_info = dataset.recordings[rec_idx]
+                if isinstance(rec_info, dict):
+                    rec_name = rec_info.get('events', rec_info.get('path', 'unknown'))
+                    if hasattr(rec_name, 'name'):
+                        rec_name = rec_name.name
+                else:
+                    rec_name = rec_info.name if hasattr(rec_info, 'name') else str(rec_info)
+                print(f"Sample {i}: sat_pixels=0, events={total_events}, recording={rec_name}")
         else:
             good_count += 1
 
