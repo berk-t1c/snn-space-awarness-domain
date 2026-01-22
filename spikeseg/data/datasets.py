@@ -302,8 +302,9 @@ def events_to_voxel_grid(
         # Handle various polarity conventions: (0,1), (-1,1), (1,2), etc.
         p_min, p_max = p.min(), p.max()
         if p_min < 0:
-            # Convention: -1/+1 -> map to 0/1
-            c_idx = ((p + 1) // 2).astype(np.int32)
+            # Convention: -1/+1 -> map to channels (ON=0, OFF=1)
+            # +1 (ON) -> (1-1)//2 = 0, -1 (OFF) -> (1-(-1))//2 = 1
+            c_idx = ((1 - p) // 2).astype(np.int32)
         elif p_min == 0 and p_max <= 1:
             # Convention: 0/1 -> use directly
             c_idx = p.astype(np.int32)
@@ -423,12 +424,13 @@ def events_to_time_surface(
     p = events.p
     if polarity_channels:
         if p.min() < 0:
-            c_idx = ((p + 1) // 2).astype(np.int32)
+            # +1 (ON) -> Channel 0, -1 (OFF) -> Channel 1
+            c_idx = ((1 - p) // 2).astype(np.int32)
         else:
             c_idx = p.astype(np.int32)
     else:
         c_idx = np.zeros_like(x)
-    
+
     # Take maximum decay value for each pixel
     for i in range(len(events)):
         c, yi, xi = c_idx[i], y[i], x[i]

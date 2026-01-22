@@ -594,9 +594,9 @@ class TemporalBuffer(nn.Module):
         x = np.clip(x, 0, self.width - 1).astype(np.int32)
         y = np.clip(y, 0, self.height - 1).astype(np.int32)
         
-        # Handle polarity
+        # Handle polarity: +1 (ON) -> Channel 0, -1 (OFF) -> Channel 1
         if p.min() < 0:
-            c_idx = ((p + 1) // 2).astype(np.int32)
+            c_idx = ((1 - p) // 2).astype(np.int32)
         else:
             c_idx = p.astype(np.int32)
         
