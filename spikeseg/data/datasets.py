@@ -1074,11 +1074,11 @@ class EBSSADataset(EventDataset):
         return recordings
 
     def _filter_valid_recordings(self) -> List[Dict[str, Any]]:
-        """Filter out recordings with empty/invalid timestamps.
+        """Filter out recordings with empty/invalid object labels.
 
-        Some EBSSA recordings have Obj.x and Obj.y but empty Obj.ts,
-        making it impossible to correctly filter labels to time windows.
-        These recordings cause empty masks and pollute training.
+        Some EBSSA recordings have empty Obj.x, Obj.y, or Obj.ts fields,
+        meaning they have no object trajectory data. These recordings
+        cannot be used for supervised training.
         """
         import scipy.io as sio
 
@@ -1101,10 +1101,17 @@ class EBSSADataset(EventDataset):
                     skipped += 1
                     continue
                 obj = mat['Obj']
-                if hasattr(obj, 'dtype') and obj.dtype.names and 'ts' in obj.dtype.names:
-                    obj_ts = unwrap_field(obj['ts'])
-                    ts_arr = np.asarray(obj_ts).flatten() if obj_ts is not None else np.array([])
-                    if len(ts_arr) > 0:
+                if hasattr(obj, 'dtype') and obj.dtype.names:
+                    # Check all required fields have data
+                    obj_x = unwrap_field(obj['x']) if 'x' in obj.dtype.names else None
+                    obj_y = unwrap_field(obj['y']) if 'y' in obj.dtype.names else None
+                    obj_ts = unwrap_field(obj['ts']) if 'ts' in obj.dtype.names else None
+
+                    x_len = len(np.asarray(obj_x).flatten()) if obj_x is not None else 0
+                    y_len = len(np.asarray(obj_y).flatten()) if obj_y is not None else 0
+                    ts_len = len(np.asarray(obj_ts).flatten()) if obj_ts is not None else 0
+
+                    if x_len > 0 and y_len > 0 and ts_len > 0:
                         valid.append(rec)
                     else:
                         skipped += 1
@@ -1114,7 +1121,7 @@ class EBSSADataset(EventDataset):
                 skipped += 1
 
         if skipped > 0:
-            print(f"[EBSSADataset] Filtered {skipped} recordings with empty/invalid timestamps, {len(valid)} remaining")
+            print(f"[EBSSADataset] Filtered {skipped} recordings with empty labels, {len(valid)} remaining")
         return valid
 
     def _apply_split(self) -> None:
