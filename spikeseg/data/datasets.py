@@ -991,7 +991,11 @@ class EBSSADataset(EventDataset):
         
         # Find recordings
         self.recordings = self._find_recordings()
-        
+
+        # Filter out recordings with empty labels (data quality issue in EBSSA)
+        if self.use_labels:
+            self.recordings = self._filter_valid_recordings()
+
         # Apply split
         self._apply_split()
         
@@ -1068,7 +1072,53 @@ class EBSSADataset(EventDataset):
                 })
         
         return recordings
-    
+
+    def _filter_valid_recordings(self) -> List[Dict[str, Any]]:
+        """Filter out recordings with empty object labels.
+
+        Some EBSSA recordings have empty Obj.x, Obj.y, or Obj.ts fields,
+        meaning they have no object trajectory data for supervised training.
+        """
+        import scipy.io as sio
+
+        def unwrap_field(field):
+            if field is None:
+                return None
+            if hasattr(field, 'shape') and field.shape == () and hasattr(field, 'dtype') and field.dtype == object:
+                return unwrap_field(field.item())
+            if hasattr(field, 'flatten'):
+                return field.flatten()
+            return field
+
+        valid = []
+        skipped = 0
+        for rec in self.recordings:
+            try:
+                mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                if 'Obj' not in mat:
+                    skipped += 1
+                    continue
+                obj = mat['Obj']
+                if hasattr(obj, 'dtype') and obj.dtype.names:
+                    obj_x = unwrap_field(obj['x']) if 'x' in obj.dtype.names else None
+                    obj_y = unwrap_field(obj['y']) if 'y' in obj.dtype.names else None
+                    obj_ts = unwrap_field(obj['ts']) if 'ts' in obj.dtype.names else None
+                    x_len = len(np.asarray(obj_x).flatten()) if obj_x is not None else 0
+                    y_len = len(np.asarray(obj_y).flatten()) if obj_y is not None else 0
+                    ts_len = len(np.asarray(obj_ts).flatten()) if obj_ts is not None else 0
+                    if x_len > 0 and y_len > 0 and ts_len > 0:
+                        valid.append(rec)
+                    else:
+                        skipped += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+
+        if skipped > 0:
+            print(f"[EBSSADataset] Filtered {skipped} recordings with empty labels, {len(valid)} remaining")
+        return valid
+
     def _apply_split(self) -> None:
         """Apply train/val/test split."""
         if self.split == "all":
