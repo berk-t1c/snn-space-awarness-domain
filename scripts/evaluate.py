@@ -571,7 +571,8 @@ def predict_sample(
 def load_model(
     checkpoint_path: Path,
     device: torch.device,
-    create_hulk: bool = True
+    create_hulk: bool = True,
+    inference_threshold: Optional[float] = None
 ) -> Tuple[SpikeSEGEncoder, Optional[HULKDecoder]]:
     """
     Load trained model from checkpoint and create HULK decoder.
@@ -616,6 +617,20 @@ def load_model(
         logger.info(f"Loaded model config from checkpoint: n_classes={n_classes}, "
                    f"thresholds={thresholds}, leaks={leaks}, "
                    f"channels=[{conv1_channels}, {conv2_channels}], kernels={kernel_sizes}")
+
+        # Override thresholds if inference_threshold is specified
+        # This is needed because training uses adaptive thresholds (theta_max=10.0)
+        # but those are NOT saved in the checkpoint
+        if inference_threshold is not None:
+            base_thresholds = thresholds.copy()
+            # Scale leak proportionally: if base was [0.1, 0.1, 0.1] with leaks [0.09, 0.01, 0.0]
+            # that's [90%, 10%, 0%] of threshold. Keep same ratios.
+            leak_ratios = [leaks[i] / thresholds[i] if thresholds[i] > 0 else 0 for i in range(len(leaks))]
+            thresholds = [inference_threshold] * len(thresholds)
+            leaks = [inference_threshold * leak_ratios[i] for i in range(len(leak_ratios))]
+            logger.info(f"OVERRIDE: Using inference_threshold={inference_threshold}")
+            logger.info(f"  Original thresholds: {base_thresholds}")
+            logger.info(f"  New thresholds: {thresholds}, leaks: {leaks}")
     except (KeyError, TypeError):
         n_classes = 1  # Default to 1 (detection mode per IGARSS 2023)
         thresholds = default_thresholds
@@ -628,6 +643,13 @@ def load_model(
         pool2_kernel = default_pool2_kernel
         pool2_stride = default_pool2_stride
         logger.info(f"Using default model config: n_classes={n_classes}")
+
+        # Override thresholds if inference_threshold is specified
+        if inference_threshold is not None:
+            leak_ratios = [leaks[i] / thresholds[i] if thresholds[i] > 0 else 0 for i in range(len(leaks))]
+            thresholds = [inference_threshold] * len(thresholds)
+            leaks = [inference_threshold * leak_ratios[i] for i in range(len(leak_ratios))]
+            logger.info(f"OVERRIDE: Using inference_threshold={inference_threshold}")
 
     # Get input_channels from checkpoint config
     try:
@@ -1323,6 +1345,14 @@ def main():
         help='Use volume-based event density evaluation (Afshar et al. 2019 / IGARSS 2023 methodology). '
              'This is the ORIGINAL paper methodology that achieved 89.1%% informedness.'
     )
+    parser.add_argument(
+        '--inference-threshold',
+        type=float,
+        default=None,
+        help='Override LIF neuron threshold for inference. Training uses adaptive thresholds '
+             '(theta_max=10.0), but these are NOT saved in checkpoint. Default uses config value (0.1), '
+             'which may be too low. Try 1.0-5.0 for better specificity.'
+    )
 
     args = parser.parse_args()
 
@@ -1340,7 +1370,8 @@ def main():
 
     model, hulk_decoder = load_model(
         checkpoint_path, device,
-        create_hulk=not args.no_hulk
+        create_hulk=not args.no_hulk,
+        inference_threshold=args.inference_threshold
     )
 
     # Load dataset
