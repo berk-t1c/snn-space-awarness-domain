@@ -921,8 +921,7 @@ class EventStreamProcessor(nn.Module):
         if self.polarity_channels:
             # Channel 0: ON (positive), Channel 1: OFF (negative)
             if p.min() < 0:
-                # +1 (ON) -> Channel 0, -1 (OFF) -> Channel 1
-                c_idx = ((1 - p) // 2).astype(np.int32)
+                c_idx = ((p + 1) // 2).astype(np.int32)
             else:
                 c_idx = p.astype(np.int32)
         else:
