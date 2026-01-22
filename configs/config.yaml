@@ -114,7 +114,7 @@ data:
   normalize: true           # Normalize event counts
   shuffle_train: true       # Shuffle training data
   shuffle_val: false        # Shuffle validation data
-  train_ratio: 0.8          # 80/20 train/test split for honest evaluation
+  train_ratio: 0.9          # 90/10 split: train on 90%, validate on 10%
   
   # Sliding window sampling - disabled since we filter to object time window
   # Object-time filtering extracts only the ~0.5-2s when satellite is tracked
