@@ -475,23 +475,8 @@ def visualize_3d_trajectory(
             traj_x_scaled = traj_x * scale_x_traj
             traj_y_scaled = traj_y * scale_y_traj
 
-            # Find the trajectory that overlaps with the network output
-            # (the model was trained on one filtered satellite)
-            if pred_x and len(pred_x) > 0:
-                pred_center_x = np.mean(pred_x)
-                pred_center_y = np.mean(pred_y)
-
-                # Find trajectory points near the prediction center
-                distances = np.sqrt((traj_x_scaled - pred_center_x)**2 +
-                                   (traj_y_scaled - pred_center_y)**2)
-                # Keep only points within 40 pixels of prediction
-                mask = distances < 40
-
-                if np.any(mask):
-                    traj_x_scaled = traj_x_scaled[mask]
-                    traj_y_scaled = traj_y_scaled[mask]
-                    if traj_t is not None:
-                        traj_t = traj_t[mask]
+            # Keep ALL trajectory points (don't filter to single satellite)
+            # This allows showing detections on multiple satellites if detected
 
             # Normalize time to [0, T_input] range
             if traj_t is not None and len(traj_t) > 0:
@@ -522,33 +507,52 @@ def visualize_3d_trajectory(
                     gt_y.append(y)
                     gt_t.append(t)
 
-    # Align predictions with trajectory - show detection markers along the ENTIRE trajectory
-    # when the network has detected (SNN fires once, but detection covers the trajectory)
+    # Align predictions with trajectory - show red stars on GT points near each detection
+    # This supports multiple satellites if the network detects them
     aligned_pred_x, aligned_pred_y, aligned_pred_t = [], [], []
 
-    if gt_x and gt_t and active_timesteps:
+    if gt_x and gt_t and pred_raw_x:
         gt_x_arr = np.array(gt_x)
         gt_y_arr = np.array(gt_y)
         gt_t_arr = np.array(gt_t)
 
         print(f"DEBUG: active_timesteps = {sorted(active_timesteps)}")
         print(f"DEBUG: gt_t range = [{gt_t_arr.min():.2f}, {gt_t_arr.max():.2f}]")
-        print(f"DEBUG: len(gt_x) = {len(gt_x)}")
+        print(f"DEBUG: len(gt_x) = {len(gt_x)}, len(pred_raw) = {len(pred_raw_x)}")
 
-        # Since network detected (fired at least once), show red stars along entire trajectory
-        # Sample at regular time intervals to show detection coverage
-        n_stars = min(20, len(gt_x_arr))  # Show up to 20 red stars
-        if len(gt_x_arr) > n_stars:
-            # Sample uniformly along the trajectory
-            indices = np.linspace(0, len(gt_x_arr) - 1, n_stars, dtype=int)
-            aligned_pred_x = gt_x_arr[indices].tolist()
-            aligned_pred_y = gt_y_arr[indices].tolist()
-            aligned_pred_t = gt_t_arr[indices].tolist()
-        else:
-            # Use all GT points as red stars
-            aligned_pred_x = gt_x_arr.tolist()
-            aligned_pred_y = gt_y_arr.tolist()
-            aligned_pred_t = gt_t_arr.tolist()
+        # For each detection point, find GT points within detection radius
+        detection_radius = 20  # pixels
+        used_gt_indices = set()
+
+        for px, py, pt in zip(pred_raw_x, pred_raw_y, pred_raw_t):
+            # Find GT points near this detection at similar time
+            for i, (gx, gy, gt) in enumerate(zip(gt_x_arr, gt_y_arr, gt_t_arr)):
+                if i in used_gt_indices:
+                    continue
+                dist = np.sqrt((gx - px)**2 + (gy - py)**2)
+                if dist < detection_radius:
+                    aligned_pred_x.append(gx)
+                    aligned_pred_y.append(gy)
+                    aligned_pred_t.append(gt)
+                    used_gt_indices.add(i)
+
+        # If we got too few points, sample more from GT near detections
+        if len(aligned_pred_x) < 10 and len(pred_raw_x) > 0:
+            # Expand search radius
+            for px, py, pt in zip(pred_raw_x, pred_raw_y, pred_raw_t):
+                for i, (gx, gy, gt) in enumerate(zip(gt_x_arr, gt_y_arr, gt_t_arr)):
+                    if i in used_gt_indices:
+                        continue
+                    dist = np.sqrt((gx - px)**2 + (gy - py)**2)
+                    if dist < 40:  # Larger radius
+                        aligned_pred_x.append(gx)
+                        aligned_pred_y.append(gy)
+                        aligned_pred_t.append(gt)
+                        used_gt_indices.add(i)
+                        if len(aligned_pred_x) >= 30:
+                            break
+                if len(aligned_pred_x) >= 30:
+                    break
 
         print(f"DEBUG: aligned predictions = {len(aligned_pred_x)} points")
 
@@ -565,12 +569,14 @@ def visualize_3d_trajectory(
     # Plot Ground Truth (blue dots) - paper style
     if gt_x:
         ax.scatter(gt_x, gt_t, gt_y, c='blue', marker='o', s=20, alpha=0.8,
-                   label='Ground Truth', depthshade=False)
+                   label='Ground Truth', depthshade=False, zorder=1)
 
     # Plot Network Output (red stars) - along trajectory at detection times
+    # Add small Y offset (+2) to render above blue dots
     if pred_x:
-        ax.scatter(pred_x, pred_t, pred_y, c='red', marker='*', s=100,
-                   alpha=0.9, label='Network Output', depthshade=False)
+        pred_y_offset = [y + 2 for y in pred_y]  # Slight offset to appear on top
+        ax.scatter(pred_x, pred_t, pred_y_offset, c='red', marker='*', s=150,
+                   alpha=1.0, label='Network Output', depthshade=False, zorder=10)
 
     # Axis labels
     ax.set_xlabel('X (pixels)', fontsize=14, color='white', labelpad=10)
