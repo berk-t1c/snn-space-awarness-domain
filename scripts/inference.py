@@ -58,6 +58,108 @@ class BoundingBox:
         }
 
 
+def merge_overlapping_boxes(boxes: List[BoundingBox], iou_threshold: float = 0.3) -> List[BoundingBox]:
+    """
+    Merge overlapping bounding boxes into single consolidated boxes.
+
+    Args:
+        boxes: List of detected bounding boxes
+        iou_threshold: IoU threshold for merging (lower = more aggressive merging)
+
+    Returns:
+        List of merged bounding boxes
+    """
+    if len(boxes) <= 1:
+        return boxes
+
+    # Convert to numpy for easier manipulation
+    coords = np.array([[b.x_min, b.y_min, b.x_max, b.y_max, b.confidence] for b in boxes])
+
+    # Iteratively merge overlapping boxes
+    merged = True
+    while merged:
+        merged = False
+        n = len(coords)
+        if n <= 1:
+            break
+
+        # Find pairs to merge
+        to_merge = []
+        used = set()
+
+        for i in range(n):
+            if i in used:
+                continue
+            for j in range(i + 1, n):
+                if j in used:
+                    continue
+
+                # Calculate IoU
+                x1 = max(coords[i, 0], coords[j, 0])
+                y1 = max(coords[i, 1], coords[j, 1])
+                x2 = min(coords[i, 2], coords[j, 2])
+                y2 = min(coords[i, 3], coords[j, 3])
+
+                if x2 > x1 and y2 > y1:
+                    intersection = (x2 - x1) * (y2 - y1)
+                    area_i = (coords[i, 2] - coords[i, 0]) * (coords[i, 3] - coords[i, 1])
+                    area_j = (coords[j, 2] - coords[j, 0]) * (coords[j, 3] - coords[j, 1])
+                    union = area_i + area_j - intersection
+                    iou = intersection / union if union > 0 else 0
+
+                    # Also check if boxes are close (within 10 pixels)
+                    close = (abs(coords[i, 0] - coords[j, 2]) < 10 or
+                             abs(coords[j, 0] - coords[i, 2]) < 10 or
+                             abs(coords[i, 1] - coords[j, 3]) < 10 or
+                             abs(coords[j, 1] - coords[i, 3]) < 10)
+
+                    if iou > iou_threshold or (iou > 0 and close):
+                        to_merge.append((i, j))
+                        used.add(i)
+                        used.add(j)
+                        merged = True
+                        break
+            if merged:
+                break
+
+        # Merge found pairs
+        if to_merge:
+            new_coords = []
+            merged_indices = set()
+
+            for i, j in to_merge:
+                # Merge boxes i and j
+                new_box = [
+                    min(coords[i, 0], coords[j, 0]),  # x_min
+                    min(coords[i, 1], coords[j, 1]),  # y_min
+                    max(coords[i, 2], coords[j, 2]),  # x_max
+                    max(coords[i, 3], coords[j, 3]),  # y_max
+                    max(coords[i, 4], coords[j, 4]),  # confidence
+                ]
+                new_coords.append(new_box)
+                merged_indices.add(i)
+                merged_indices.add(j)
+
+            # Keep unmerged boxes
+            for i in range(n):
+                if i not in merged_indices:
+                    new_coords.append(coords[i].tolist())
+
+            coords = np.array(new_coords)
+
+    # Convert back to BoundingBox objects
+    return [
+        BoundingBox(
+            x_min=float(c[0]),
+            y_min=float(c[1]),
+            x_max=float(c[2]),
+            y_max=float(c[3]),
+            confidence=float(c[4])
+        )
+        for c in coords
+    ]
+
+
 def load_model(checkpoint_path: str, device: torch.device, inference_threshold: float = 0.05):
     """Load model from checkpoint with optimal inference threshold."""
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -122,6 +224,7 @@ def detect_satellites(
     events: torch.Tensor,
     device: torch.device,
     min_cluster_pixels: int = 2,
+    return_spikes: bool = False,
 ) -> List[BoundingBox]:
     """
     Run inference and return detected satellite bounding boxes.
@@ -131,9 +234,11 @@ def detect_satellites(
         events: Input tensor (T, C, H, W) or (B, T, C, H, W)
         device: Compute device
         min_cluster_pixels: Minimum cluster size to count as detection
+        return_spikes: If True, also return raw classification spikes for visualization
 
     Returns:
         List of BoundingBox for detected satellites
+        If return_spikes=True: (boxes, classification_spikes)
     """
     model.eval()
 
@@ -150,6 +255,9 @@ def detect_satellites(
 
         # Forward pass
         output = model(events)
+
+        # Store raw spikes for 3D visualization (T, B, C, H, W)
+        raw_spikes = output.classification_spikes.clone()
 
         # Get classification spikes: (T, B, C, H, W) -> sum over time
         class_spikes = output.classification_spikes.sum(dim=0)  # (B, C, H, W)
@@ -202,6 +310,8 @@ def detect_satellites(
                     confidence=float(confidence)
                 ))
 
+        if return_spikes:
+            return all_boxes, raw_spikes
         return all_boxes
 
 
@@ -254,6 +364,142 @@ def visualize_detections(
     plt.close()
 
 
+def visualize_3d_trajectory(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    label: Optional[torch.Tensor] = None,
+    output_path: Optional[str] = None,
+    title: str = "Satellite Detection"
+):
+    """
+    3D visualization like in the paper: X, Y, Time axes.
+
+    Shows ground truth (cyan) and network output (red) trajectories.
+
+    Args:
+        events: Input events (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W) or (T, C, H, W)
+        label: Ground truth mask (H, W) or (T, H, W)
+        output_path: Path to save figure
+        title: Figure title
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    # Process predictions to get spike locations over time
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+
+    # Handle different shapes
+    if pred_np.ndim == 5:  # (T, B, C, H, W)
+        pred_np = pred_np[:, 0, :, :, :]  # Take first batch
+    if pred_np.ndim == 4:  # (T, C, H, W)
+        pred_np = pred_np.sum(axis=1)  # Sum channels -> (T, H, W)
+
+    T, H, W = pred_np.shape
+
+    # Extract prediction coordinates (time, y, x)
+    pred_coords = []
+    for t in range(T):
+        ys, xs = np.where(pred_np[t] > 0)
+        for y, x in zip(ys, xs):
+            pred_coords.append([x, y, t])
+    pred_coords = np.array(pred_coords) if pred_coords else np.empty((0, 3))
+
+    # Extract ground truth coordinates
+    gt_coords = []
+    if label is not None:
+        label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
+
+        if label_np.ndim == 2:  # Static mask (H, W) - replicate across time
+            ys, xs = np.where(label_np > 0)
+            for y, x in zip(ys, xs):
+                # Spread across all timesteps
+                for t in range(T):
+                    gt_coords.append([x, y, t])
+        elif label_np.ndim == 3:  # (T, H, W)
+            for t in range(min(T, label_np.shape[0])):
+                ys, xs = np.where(label_np[t] > 0)
+                for y, x in zip(ys, xs):
+                    gt_coords.append([x, y, t])
+    gt_coords = np.array(gt_coords) if gt_coords else np.empty((0, 3))
+
+    # Create figure with 3D plot and 2D overview inset
+    fig = plt.figure(figsize=(14, 10))
+
+    # Main 3D plot
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot ground truth (cyan squares)
+    if len(gt_coords) > 0:
+        # Subsample if too many points
+        if len(gt_coords) > 5000:
+            idx = np.random.choice(len(gt_coords), 5000, replace=False)
+            gt_plot = gt_coords[idx]
+        else:
+            gt_plot = gt_coords
+        ax.scatter(gt_plot[:, 0], gt_plot[:, 1], gt_plot[:, 2],
+                   c='cyan', marker='s', s=8, alpha=0.6, label='Ground Truth')
+
+    # Plot predictions (red +)
+    if len(pred_coords) > 0:
+        # Subsample if too many points
+        if len(pred_coords) > 5000:
+            idx = np.random.choice(len(pred_coords), 5000, replace=False)
+            pred_plot = pred_coords[idx]
+        else:
+            pred_plot = pred_coords
+        ax.scatter(pred_plot[:, 0], pred_plot[:, 1], pred_plot[:, 2],
+                   c='red', marker='+', s=20, alpha=0.8, label='Network Output')
+
+    # Labels and styling
+    ax.set_xlabel('X', fontsize=12, labelpad=10)
+    ax.set_ylabel('Y', fontsize=12, labelpad=10)
+    ax.set_zlabel('Time', fontsize=12, labelpad=10)
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, H)
+    ax.set_zlim(0, T)
+
+    # Invert Y axis to match image coordinates
+    ax.invert_yaxis()
+
+    ax.legend(loc='upper left', fontsize=10)
+    ax.set_title(title, fontsize=14, pad=20)
+
+    # Set viewing angle similar to paper
+    ax.view_init(elev=20, azim=-60)
+
+    # Add 2D overview inset
+    inset_ax = fig.add_axes([0.7, 0.1, 0.25, 0.25])
+
+    # Create 2D overview (sum over time)
+    if len(gt_coords) > 0:
+        inset_ax.scatter(gt_coords[:, 0], gt_coords[:, 1],
+                        c='cyan', marker='s', s=1, alpha=0.3)
+    if len(pred_coords) > 0:
+        inset_ax.scatter(pred_coords[:, 0], pred_coords[:, 1],
+                        c='red', marker='+', s=2, alpha=0.5)
+
+    inset_ax.set_xlim(0, W)
+    inset_ax.set_ylim(H, 0)  # Invert Y
+    inset_ax.set_title('Overview', fontsize=9)
+    inset_ax.set_xlabel('X', fontsize=8)
+    inset_ax.set_ylabel('Y', fontsize=8)
+    inset_ax.tick_params(labelsize=7)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
+        print(f"Saved 3D visualization: {output_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+    return fig
+
+
 def main():
     parser = argparse.ArgumentParser(description='SpikeSEG Satellite Detection')
     parser.add_argument('--checkpoint', '-c', required=True, help='Model checkpoint path')
@@ -261,7 +507,8 @@ def main():
     parser.add_argument('--data-root', '-d', help='EBSSA dataset root for batch inference')
     parser.add_argument('--output', '-o', default='detections.json', help='Output JSON file')
     parser.add_argument('--threshold', type=float, default=0.05, help='Inference threshold')
-    parser.add_argument('--visualize', action='store_true', help='Save visualization images')
+    parser.add_argument('--visualize', action='store_true', help='Save 2D visualization images')
+    parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
 
@@ -297,7 +544,17 @@ def main():
             # x is (T, C, H, W), need (T, B, C, H, W)
             x = x.unsqueeze(1)
 
-            boxes = detect_satellites(model, x, device)
+            # Get boxes and optionally raw spikes for 3D viz
+            need_spikes = args.visualize_3d and i < 10
+            result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
+
+            if need_spikes:
+                boxes, raw_spikes = result_data
+            else:
+                boxes = result_data
+
+            # Merge overlapping boxes
+            boxes = merge_overlapping_boxes(boxes, iou_threshold=0.3)
 
             result = {
                 'sample_id': i,
@@ -306,10 +563,17 @@ def main():
             }
             results.append(result)
 
-            if args.visualize and i < 10:  # Visualize first 10
+            if args.visualize and i < 10:  # 2D visualization
                 visualize_detections(
                     x, boxes, label,
                     output_path=f'detection_{i:03d}.png'
+                )
+
+            if args.visualize_3d and i < 10:  # 3D paper-style visualization
+                visualize_3d_trajectory(
+                    x, raw_spikes, label,
+                    output_path=f'detection_3d_{i:03d}.png',
+                    title=f'Sample {i}: Satellite Detection'
                 )
 
             if (i + 1) % 10 == 0:
