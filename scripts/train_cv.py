@@ -32,17 +32,25 @@ def get_valid_recordings(data_root: str, sensor: str = "all") -> List[str]:
 
     recordings = []
 
-    # Collect all .mat files
-    sensor_dirs = []
-    if sensor in ["ATIS", "all"]:
-        sensor_dirs.append(labelled_dir / "ATIS")
-    if sensor in ["DAVIS", "all"]:
-        sensor_dirs.append(labelled_dir / "DAVIS")
-
-    for sensor_dir in sensor_dirs:
-        if sensor_dir.exists():
-            for mat_file in sorted(sensor_dir.glob("*.mat")):
+    # Collect all .mat files - check both flat structure and sensor subdirs
+    if labelled_dir.exists():
+        # First try flat structure (files directly in Labelled Data/)
+        for mat_file in sorted(labelled_dir.glob("*_labelled.mat")):
+            filename = mat_file.name.lower()
+            if sensor == "all":
                 recordings.append(str(mat_file))
+            elif sensor.lower() == "atis" and "_atis_" in filename:
+                recordings.append(str(mat_file))
+            elif sensor.lower() == "davis" and "_davis_" in filename:
+                recordings.append(str(mat_file))
+
+        # Also check ATIS/DAVIS subdirs if they exist
+        for subdir in ["ATIS", "DAVIS"]:
+            sensor_dir = labelled_dir / subdir
+            if sensor_dir.exists():
+                if sensor == "all" or sensor.upper() == subdir:
+                    for mat_file in sorted(sensor_dir.glob("*.mat")):
+                        recordings.append(str(mat_file))
 
     # Filter valid recordings (non-empty labels)
     def unwrap_field(field):
