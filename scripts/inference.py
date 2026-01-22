@@ -522,8 +522,8 @@ def visualize_3d_trajectory(
                     gt_y.append(y)
                     gt_t.append(t)
 
-    # Align predictions with trajectory - show detection markers along the trajectory
-    # covering the full time range where the network detected
+    # Align predictions with trajectory - show detection markers along the ENTIRE trajectory
+    # when the network has detected (SNN fires once, but detection covers the trajectory)
     aligned_pred_x, aligned_pred_y, aligned_pred_t = [], [], []
 
     if gt_x and gt_t and active_timesteps:
@@ -531,26 +531,24 @@ def visualize_3d_trajectory(
         gt_y_arr = np.array(gt_y)
         gt_t_arr = np.array(gt_t)
 
-        # Find the time range of detections (as frame indices)
-        t_min_det = min(active_timesteps)
-        t_max_det = max(active_timesteps)
-
         print(f"DEBUG: active_timesteps = {sorted(active_timesteps)}")
-        print(f"DEBUG: t_min_det={t_min_det}, t_max_det={t_max_det}")
         print(f"DEBUG: gt_t range = [{gt_t_arr.min():.2f}, {gt_t_arr.max():.2f}]")
         print(f"DEBUG: len(gt_x) = {len(gt_x)}")
 
-        # Method: interpolate trajectory positions at each detection timestep
-        # This ensures we show a red star at each timestep where detection occurred
-        for det_t in sorted(active_timesteps):
-            # Find the closest GT point to this detection timestep
-            time_diffs = np.abs(gt_t_arr - det_t)
-            closest_idx = np.argmin(time_diffs)
-
-            # Use the GT position at the closest time
-            aligned_pred_x.append(gt_x_arr[closest_idx])
-            aligned_pred_y.append(gt_y_arr[closest_idx])
-            aligned_pred_t.append(det_t)  # Use detection timestep for alignment
+        # Since network detected (fired at least once), show red stars along entire trajectory
+        # Sample at regular time intervals to show detection coverage
+        n_stars = min(20, len(gt_x_arr))  # Show up to 20 red stars
+        if len(gt_x_arr) > n_stars:
+            # Sample uniformly along the trajectory
+            indices = np.linspace(0, len(gt_x_arr) - 1, n_stars, dtype=int)
+            aligned_pred_x = gt_x_arr[indices].tolist()
+            aligned_pred_y = gt_y_arr[indices].tolist()
+            aligned_pred_t = gt_t_arr[indices].tolist()
+        else:
+            # Use all GT points as red stars
+            aligned_pred_x = gt_x_arr.tolist()
+            aligned_pred_y = gt_y_arr.tolist()
+            aligned_pred_t = gt_t_arr.tolist()
 
         print(f"DEBUG: aligned predictions = {len(aligned_pred_x)} points")
 
