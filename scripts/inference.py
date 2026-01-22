@@ -438,15 +438,15 @@ def visualize_3d_trajectory(
     ax = fig.add_subplot(111, projection='3d')
     ax.set_facecolor('black')
 
-    # Plot Ground Truth (cyan) - larger markers
+    # Plot Ground Truth (blue dots) - paper style
     if gt_x:
-        ax.scatter(gt_x, gt_t, gt_y, c='cyan', marker='o', s=30, alpha=0.7,
+        ax.scatter(gt_x, gt_t, gt_y, c='blue', marker='o', s=15, alpha=0.8,
                    label='Ground Truth', depthshade=False)
 
-    # Plot Network Output (red +) - on top
+    # Plot Network Output (red stars) - paper style
     if pred_x:
-        ax.scatter(pred_x, pred_t, pred_y, c='red', marker='+', s=80,
-                   linewidths=2, alpha=0.9, label='Network Output', depthshade=False)
+        ax.scatter(pred_x, pred_t, pred_y, c='red', marker='*', s=60,
+                   alpha=0.9, label='Network Output', depthshade=False)
 
     # Axis labels (paper style: X, Time, Y)
     ax.set_xlabel('X (pixels)', fontsize=14, color='white', labelpad=10)
