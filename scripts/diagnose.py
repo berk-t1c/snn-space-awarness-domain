@@ -65,7 +65,7 @@ def diagnose(checkpoint_path: str, data_root: str, n_samples: int = 5):
     print(f"Model loaded")
 
     # Load dataset
-    dataset = EBSSADataset(data_root=data_root, sensor='all', n_timesteps=10)
+    dataset = EBSSADataset(root=data_root, sensor='all', n_timesteps=10)
     print(f"Dataset: {len(dataset)} samples")
 
     # Create figure
