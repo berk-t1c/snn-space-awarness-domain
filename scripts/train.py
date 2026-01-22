@@ -1138,6 +1138,27 @@ class AdaptiveThresholdManager:
             'mean_firing_rate': float(self.get_firing_rates().mean().item()),
         }
 
+    def state_dict(self) -> Dict[str, Any]:
+        """Get state dict for checkpointing."""
+        return {
+            'thresholds': self.thresholds.cpu(),
+            'spike_counts': self.spike_counts.cpu(),
+            'total_samples': self.total_samples,
+            'theta_rest': self.theta_rest,
+            'theta_plus': self.theta_plus,
+            'tau_theta': self.tau_theta,
+            'theta_max': self.theta_max,
+        }
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Load state dict from checkpoint."""
+        self.thresholds = state_dict['thresholds'].to(self.device)
+        self.spike_counts = state_dict['spike_counts'].to(self.device)
+        self.total_samples = state_dict['total_samples']
+        # Hyperparams are already set from init, but verify they match
+        if state_dict.get('theta_rest') != self.theta_rest:
+            self.logger.warning(f"theta_rest mismatch: checkpoint={state_dict.get('theta_rest')}, current={self.theta_rest}")
+
 
 # =============================================================================
 # STDP TRAINER
@@ -2496,7 +2517,12 @@ class STDPTrainer:
     def _save_checkpoint(self, is_best: bool = False, emergency: bool = False) -> None:
         """Save training checkpoint."""
         prefix = "emergency_" if emergency else ""
-        
+
+        # Collect adaptive threshold states
+        threshold_states = {}
+        for layer_name, thresh_mgr in self.threshold_managers.items():
+            threshold_states[layer_name] = thresh_mgr.state_dict()
+
         self.checkpoint_mgr.save(
             model=self.model,
             epoch=self.current_epoch,
@@ -2507,28 +2533,36 @@ class STDPTrainer:
             is_best=is_best,
             extra_state={
                 'global_step': self.global_step,
+                'threshold_managers': threshold_states,
             }
         )
     
     def _resume_from_checkpoint(self, path: Path) -> None:
         """Resume training from checkpoint."""
         checkpoint = self.checkpoint_mgr.load(path, device=self.device)
-        
+
         if checkpoint is None:
             self.logger.warning(f"Could not load checkpoint: {path}")
             return
-        
+
         # Restore model
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        
+
         # Restore training state
         self.current_epoch = checkpoint['epoch'] + 1
         self.current_phase = TrainingPhase(checkpoint['phase'])
         self.current_layer = checkpoint.get('layer_name')
-        
+
         if 'extra_state' in checkpoint:
             self.global_step = checkpoint['extra_state'].get('global_step', 0)
-        
+
+            # Restore adaptive threshold states
+            threshold_states = checkpoint['extra_state'].get('threshold_managers', {})
+            for layer_name, state_dict in threshold_states.items():
+                if layer_name in self.threshold_managers:
+                    self.threshold_managers[layer_name].load_state_dict(state_dict)
+                    self.logger.info(f"Restored adaptive thresholds for {layer_name}")
+
         self.logger.info(
             f"Resumed from epoch {checkpoint['epoch']}, "
             f"phase {self.current_phase.value}, "
