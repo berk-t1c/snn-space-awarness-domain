@@ -531,16 +531,28 @@ def visualize_3d_trajectory(
         gt_y_arr = np.array(gt_y)
         gt_t_arr = np.array(gt_t)
 
-        # Find the time range of detections
+        # Find the time range of detections (as frame indices)
         t_min_det = min(active_timesteps)
         t_max_det = max(active_timesteps)
 
-        # Show red stars along the entire trajectory within the detection time range
-        for i, (gx, gy, gt) in enumerate(zip(gt_x_arr, gt_y_arr, gt_t_arr)):
-            if t_min_det <= gt <= t_max_det:
-                aligned_pred_x.append(gx)
-                aligned_pred_y.append(gy)
-                aligned_pred_t.append(gt)
+        print(f"DEBUG: active_timesteps = {sorted(active_timesteps)}")
+        print(f"DEBUG: t_min_det={t_min_det}, t_max_det={t_max_det}")
+        print(f"DEBUG: gt_t range = [{gt_t_arr.min():.2f}, {gt_t_arr.max():.2f}]")
+        print(f"DEBUG: len(gt_x) = {len(gt_x)}")
+
+        # Method: interpolate trajectory positions at each detection timestep
+        # This ensures we show a red star at each timestep where detection occurred
+        for det_t in sorted(active_timesteps):
+            # Find the closest GT point to this detection timestep
+            time_diffs = np.abs(gt_t_arr - det_t)
+            closest_idx = np.argmin(time_diffs)
+
+            # Use the GT position at the closest time
+            aligned_pred_x.append(gt_x_arr[closest_idx])
+            aligned_pred_y.append(gt_y_arr[closest_idx])
+            aligned_pred_t.append(det_t)  # Use detection timestep for alignment
+
+        print(f"DEBUG: aligned predictions = {len(aligned_pred_x)} points")
 
     # Use aligned predictions if available, otherwise use raw
     if aligned_pred_x:
