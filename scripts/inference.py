@@ -434,11 +434,38 @@ def visualize_3d_trajectory(
 
     pred_x, pred_y, pred_t = pred_raw_x, pred_raw_y, pred_raw_t
 
-    # Extract GROUND TRUTH from label mask (shows only the target satellite, not all objects)
+    # Extract GROUND TRUTH - use actual trajectory if available
     gt_x, gt_y, gt_t = [], [], []
 
-    if label is not None:
-        # Use label mask - this shows only the satellite the network was trained to detect
+    if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
+        # Use actual object trajectory (most accurate!)
+        traj_x = np.asarray(trajectory['x']).flatten()
+        traj_y = np.asarray(trajectory['y']).flatten()
+        traj_t = np.asarray(trajectory['t']).flatten()
+
+        # EBSSA original resolution is typically 240x180, scale to input resolution
+        orig_w, orig_h = 240, 180  # DAVIS sensor resolution
+        scale_x_traj = W_input / orig_w
+        scale_y_traj = H_input / orig_h
+
+        # Normalize trajectory time to [0, T_input-1] range
+        if len(traj_t) > 0:
+            t_min, t_max = traj_t.min(), traj_t.max()
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+            else:
+                traj_t_norm = np.zeros_like(traj_t)
+
+            for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                # Scale coordinates to input resolution
+                tx_scaled = tx * scale_x_traj
+                ty_scaled = ty * scale_y_traj
+                if 0 <= tx_scaled < W_input and 0 <= ty_scaled < H_input:
+                    gt_x.append(float(tx_scaled))
+                    gt_y.append(float(ty_scaled))
+                    gt_t.append(float(tt))
+    elif label is not None:
+        # Fallback: Use label mask - shows satellite from events
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
         if label_np.ndim == 2:
             for t in range(T_input):
@@ -560,6 +587,269 @@ def visualize_3d_trajectory(
     return fig
 
 
+def animate_3d_trajectory(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    label: Optional[torch.Tensor] = None,
+    trajectory: Optional[dict] = None,
+    output_path: Optional[str] = None,
+    title: str = "Satellite Detection",
+    fps: int = 10,
+    interval: int = 100,
+    trail_length: int = 5,
+):
+    """
+    Animated 3D visualization showing satellite detections appearing one by one.
+
+    Creates a frame-by-frame animation where:
+    - Ground truth points (blue dots) appear sequentially over time
+    - Network output (red stars) appear along the trajectory where detected
+    - Both blue and red dots build up together over time
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        label: Ground truth mask (H, W) - fallback if no trajectory
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
+        output_path: Path to save animation (.gif or .mp4)
+        title: Animation title
+        fps: Frames per second for saved animation
+        interval: Delay between frames in milliseconds
+        trail_length: Number of timesteps to keep visible (0 = show all history)
+
+    Returns:
+        matplotlib.animation.FuncAnimation object
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+
+    # Get input events
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]
+    if events_np.ndim == 4:
+        events_np = events_np.sum(axis=1)
+
+    T_input, H_input, W_input = events_np.shape
+
+    # Get predictions
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+
+    # Scale and offset for predictions
+    scale_y = H_input / H_pred
+    scale_x = W_input / W_pred
+    offset = 12
+
+    # Extract ground truth coordinates per timestep
+    gt_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
+
+    # Use actual trajectory data if available (much more accurate!)
+    if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
+        traj_x = np.asarray(trajectory['x']).flatten()
+        traj_y = np.asarray(trajectory['y']).flatten()
+        traj_t = np.asarray(trajectory['t']).flatten()
+
+        # EBSSA original resolution is typically 240x180, scale to input resolution
+        orig_w, orig_h = 240, 180  # DAVIS sensor resolution
+        scale_x_traj = W_input / orig_w
+        scale_y_traj = H_input / orig_h
+
+        # Normalize trajectory time to [0, T_input-1] range
+        if len(traj_t) > 0:
+            t_min, t_max = traj_t.min(), traj_t.max()
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+            else:
+                traj_t_norm = np.zeros_like(traj_t)
+
+            # Bin trajectory points into timesteps
+            for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                t_bin = int(np.clip(tt, 0, T_input - 1))
+                # Scale coordinates to input resolution
+                tx_scaled = tx * scale_x_traj
+                ty_scaled = ty * scale_y_traj
+                if 0 <= tx_scaled < W_input and 0 <= ty_scaled < H_input:
+                    gt_per_timestep[t_bin]['x'].append(float(tx_scaled))
+                    gt_per_timestep[t_bin]['y'].append(float(ty_scaled))
+    elif label is not None:
+        # Fallback to label mask if no trajectory
+        label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
+        if label_np.ndim == 2:
+            for t in range(T_input):
+                masked = np.abs(events_np[t]) * label_np
+                ys, xs = np.where(masked > 0)
+                gt_per_timestep[t]['x'] = xs.tolist()
+                gt_per_timestep[t]['y'] = ys.tolist()
+
+    # Get raw prediction locations (spatial detections)
+    pred_raw_x, pred_raw_y = [], []
+    for t in range(T_pred):
+        ys, xs = np.where(pred_np[t] > 0)
+        for y, x in zip(ys, xs):
+            pred_raw_x.append(x * scale_x + offset)
+            pred_raw_y.append(y * scale_y + offset)
+
+    # Align predictions with GT trajectory - spread red stars along detected trajectory
+    # For each GT point, check if it's near any detection and mark it as "detected"
+    pred_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
+    detection_radius = 30  # pixels
+
+    if pred_raw_x:
+        pred_raw_x_arr = np.array(pred_raw_x)
+        pred_raw_y_arr = np.array(pred_raw_y)
+
+        for t in range(T_input):
+            if gt_per_timestep[t]['x']:
+                gt_xs = np.array(gt_per_timestep[t]['x'])
+                gt_ys = np.array(gt_per_timestep[t]['y'])
+
+                # For each GT point at this timestep, check if any detection is nearby
+                for gx, gy in zip(gt_xs, gt_ys):
+                    dists = np.sqrt((pred_raw_x_arr - gx)**2 + (pred_raw_y_arr - gy)**2)
+                    if np.min(dists) < detection_radius:
+                        # This GT point is near a detection - mark it as detected
+                        pred_per_timestep[t]['x'].append(gx)
+                        pred_per_timestep[t]['y'].append(gy)
+
+    # Create figure with dark background
+    plt.style.use('dark_background')
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_facecolor('black')
+
+    # Initialize scatter plots
+    gt_scatter = ax.scatter([], [], [], c='blue', marker='o', s=20, alpha=0.8,
+                            label='Ground Truth', depthshade=False)
+    pred_scatter = ax.scatter([], [], [], c='red', marker='*', s=150, alpha=1.0,
+                              label='Network Output', depthshade=False)
+
+    # Set axis labels and limits
+    ax.set_xlabel('X (pixels)', fontsize=14, color='white', labelpad=10)
+    ax.set_ylabel('Time (steps)', fontsize=14, color='white', labelpad=10)
+    ax.set_zlabel('Y (pixels)', fontsize=14, color='white', labelpad=10)
+    ax.set_xlim(0, W_input)
+    ax.set_ylim(0, T_input)
+    ax.set_zlim(0, H_input)
+    ax.view_init(elev=20, azim=-60)
+    ax.legend(loc='upper left', fontsize=12, facecolor='black', edgecolor='white')
+    ax.set_title(title, fontsize=16, color='white', pad=20)
+
+    # Grid styling
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.grid(True, alpha=0.3)
+
+    # Time indicator text
+    time_text = ax.text2D(0.02, 0.95, '', transform=ax.transAxes, fontsize=14,
+                          color='white', fontweight='bold')
+
+    # Cumulative data storage
+    cumulative_gt_x, cumulative_gt_y, cumulative_gt_t = [], [], []
+    cumulative_pred_x, cumulative_pred_y, cumulative_pred_t = [], [], []
+
+    def init():
+        """Initialize animation."""
+        gt_scatter._offsets3d = ([], [], [])
+        pred_scatter._offsets3d = ([], [], [])
+        time_text.set_text('')
+        return gt_scatter, pred_scatter, time_text
+
+    def update(frame):
+        """Update animation frame."""
+        nonlocal cumulative_gt_x, cumulative_gt_y, cumulative_gt_t
+        nonlocal cumulative_pred_x, cumulative_pred_y, cumulative_pred_t
+
+        # Add new GT points for this timestep
+        if frame < T_input:
+            new_x = gt_per_timestep[frame]['x']
+            new_y = gt_per_timestep[frame]['y']
+            cumulative_gt_x.extend(new_x)
+            cumulative_gt_y.extend(new_y)
+            cumulative_gt_t.extend([frame] * len(new_x))
+
+        # Add new prediction points for this timestep
+        if frame < T_pred:
+            new_px = pred_per_timestep[frame]['x']
+            new_py = pred_per_timestep[frame]['y']
+            cumulative_pred_x.extend(new_px)
+            cumulative_pred_y.extend(new_py)
+            cumulative_pred_t.extend([frame] * len(new_px))
+
+        # Apply trail effect if specified
+        if trail_length > 0 and frame > trail_length:
+            # Filter to show only recent points
+            min_t = frame - trail_length
+            gt_mask = [t >= min_t for t in cumulative_gt_t]
+            show_gt_x = [x for x, m in zip(cumulative_gt_x, gt_mask) if m]
+            show_gt_y = [y for y, m in zip(cumulative_gt_y, gt_mask) if m]
+            show_gt_t = [t for t, m in zip(cumulative_gt_t, gt_mask) if m]
+
+            pred_mask = [t >= min_t for t in cumulative_pred_t]
+            show_pred_x = [x for x, m in zip(cumulative_pred_x, pred_mask) if m]
+            show_pred_y = [y for y, m in zip(cumulative_pred_y, pred_mask) if m]
+            show_pred_t = [t for t, m in zip(cumulative_pred_t, pred_mask) if m]
+        else:
+            # Show all history
+            show_gt_x, show_gt_y, show_gt_t = cumulative_gt_x, cumulative_gt_y, cumulative_gt_t
+            show_pred_x, show_pred_y, show_pred_t = cumulative_pred_x, cumulative_pred_y, cumulative_pred_t
+
+        # Update scatter plots
+        gt_scatter._offsets3d = (show_gt_x, show_gt_t, show_gt_y)
+
+        # Offset predictions slightly to render above GT
+        pred_y_offset = [y + 2 for y in show_pred_y]
+        pred_scatter._offsets3d = (show_pred_x, show_pred_t, pred_y_offset)
+
+        # Update time indicator
+        time_text.set_text(f'Time: {frame}/{T_input-1}')
+
+        return gt_scatter, pred_scatter, time_text
+
+    # Create animation
+    anim = FuncAnimation(
+        fig, update, frames=T_input,
+        init_func=init, interval=interval, blit=False
+    )
+
+    # Save animation
+    if output_path:
+        output_path = str(output_path)
+        print(f"Saving animation to {output_path}...")
+
+        if output_path.endswith('.gif'):
+            writer = PillowWriter(fps=fps)
+            anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+        elif output_path.endswith('.mp4'):
+            try:
+                writer = FFMpegWriter(fps=fps, metadata={'title': title})
+                anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+            except Exception as e:
+                print(f"FFmpeg not available, saving as GIF instead: {e}")
+                gif_path = output_path.replace('.mp4', '.gif')
+                writer = PillowWriter(fps=fps)
+                anim.save(gif_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+                output_path = gif_path
+        else:
+            # Default to GIF
+            output_path = output_path + '.gif'
+            writer = PillowWriter(fps=fps)
+            anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+
+        print(f"Animation saved: {output_path}")
+
+    plt.style.use('default')
+
+    return anim
+
+
 def main():
     parser = argparse.ArgumentParser(description='SpikeSEG Satellite Detection')
     parser.add_argument('--checkpoint', '-c', required=True, help='Model checkpoint path')
@@ -569,6 +859,9 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.05, help='Inference threshold')
     parser.add_argument('--visualize', action='store_true', help='Save 2D visualization images')
     parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
+    parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
+    parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
+    parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--split', default='all', choices=['train', 'val', 'test', 'all'],
                         help='Dataset split to use (default: all)')
@@ -610,8 +903,8 @@ def main():
             # x is (T, C, H, W), need (T, B, C, H, W)
             x = x.unsqueeze(1)
 
-            # Get boxes and optionally raw spikes for 3D viz
-            need_spikes = args.visualize_3d and i < 10
+            # Get boxes and optionally raw spikes for 3D viz/animation
+            need_spikes = (args.visualize_3d or args.animate_3d) and i < 10
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -658,6 +951,33 @@ def main():
                     trajectory=trajectory,
                     output_path=f'figure4_sample_{i:03d}.png',
                     title=f'Sample {i}: Satellite Trajectory'
+                )
+
+            if args.animate_3d and i < 10:  # Animated 3D visualization
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': np.asarray(obj['x']).flatten() if 'x' in obj.dtype.names else None,
+                                    'y': np.asarray(obj['y']).flatten() if 'y' in obj.dtype.names else None,
+                                    't': np.asarray(obj['ts']).flatten() if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory for animation: {e}")
+
+                animate_3d_trajectory(
+                    x, raw_spikes, label,
+                    trajectory=trajectory,
+                    output_path=f'animation_sample_{i:03d}.gif',
+                    title=f'Sample {i}: Satellite Detection (Animated)',
+                    fps=args.animation_fps,
+                    trail_length=args.animation_trail,
                 )
 
             if (i + 1) % 10 == 0:

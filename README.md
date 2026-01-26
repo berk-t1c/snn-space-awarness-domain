@@ -25,9 +25,12 @@ A PyTorch implementation of biologically-inspired spiking neural networks for sa
    - [Configuration](#configuration)
 8. [API Reference](#api-reference)
 9. [Datasets](#datasets)
-10. [Citation](#citation)
-11. [References](#references)
-12. [License](#license)
+10. [Current Capabilities](#current-capabilities)
+11. [Known Limitations](#known-limitations)
+12. [Roadmap](#roadmap)
+13. [Citation](#citation)
+14. [References](#references)
+15. [License](#license)
 
 ---
 
@@ -749,6 +752,118 @@ The N-MNIST dataset [8] provides spiking digit recognition for benchmarking:
 - **Resolution**: 34x34 pixels
 - **Classes**: 10 digits (0-9)
 - **Format**: Binary event files
+
+---
+
+## Current Capabilities
+
+This implementation provides a complete pipeline for neuromorphic satellite detection:
+
+### Detection and Tracking
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Satellite Detection | Working | Detects moving satellites in event camera streams |
+| Multi-Object Tracking | Working | Tracks multiple satellites simultaneously via HULK-SMASH |
+| Bounding Box Output | Working | Returns bounding boxes with confidence scores |
+| Real-Time Processing | Working | Processes event streams at sensor frame rate |
+
+### Visualization
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| 2D Detection Overlay | Working | Bounding boxes overlaid on event frames |
+| 3D Trajectory Plot | Working | X-Y-Time visualization (IGARSS paper style) |
+| 3D Animated Visualization | Working | Frame-by-frame animation showing detections over time |
+| Saliency Maps | Working | Pixel-level attribution from decoder |
+| STDP Filter Visualization | Working | Learned Gabor-like features |
+
+### Training
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Unsupervised STDP | Working | No labels required for feature learning |
+| Layer-wise Training | Working | Train Conv1, Conv2 sequentially |
+| Convergence Monitoring | Working | Automatic stop when weights converge |
+| Cross-Validation | Working | K-fold CV with proper train/test splits |
+
+### Data Formats
+
+| Format | Status | Description |
+|--------|--------|-------------|
+| EBSSA (.mat) | Working | Native support for EBSSA dataset |
+| N-MNIST (.bin) | Working | Neuromorphic MNIST for benchmarking |
+| NumPy (.npy) | Working | Generic event arrays |
+| HDF5 (.h5) | Working | Large-scale event storage |
+
+---
+
+## Known Limitations
+
+### Training Data Constraints
+
+| Limitation | Impact | Mitigation |
+|------------|--------|------------|
+| **Positive samples only** | Model trained exclusively on images containing satellites | May produce false positives on empty sky or other moving objects |
+| **No negative mining** | No deliberate training on background-only samples | Consider post-processing with trajectory validation |
+| **Single domain** | Trained on EBSSA dataset sensors only | May require fine-tuning for different event cameras |
+
+### Algorithmic Constraints
+
+| Limitation | Impact | Mitigation |
+|------------|--------|------------|
+| **Motion saliency detector** | STDP learns general motion patterns, not satellite-specific features | Suitable for space domain where most moving points are satellites |
+| **Requires temporal coherence** | Objects must persist across multiple timesteps | Not suitable for single-frame detection |
+| **Fixed receptive field** | Kernel sizes optimized for satellite scale in EBSSA | May need adjustment for different satellite distances/sizes |
+
+### Performance Constraints
+
+| Limitation | Impact | Mitigation |
+|------------|--------|------------|
+| **No GPU-optimized STDP** | Training uses CPU-bound weight updates | Training is unsupervised and relatively fast regardless |
+| **Sequential timestep processing** | Cannot parallelize across time dimension | Inherent to recurrent SNN architecture |
+| **Memory for pooling indices** | Must store indices for unpooling in decoder | Memory scales with spatial resolution |
+
+### Evaluation Constraints
+
+| Limitation | Impact | Mitigation |
+|------------|--------|------------|
+| **No false positive rate metric** | Cannot quantify spurious detections | Recommend testing on background-only sequences |
+| **Limited cross-dataset validation** | Performance on other event camera datasets unknown | Community contributions welcome |
+
+---
+
+## Roadmap
+
+### Near-Term Improvements
+
+- [ ] **Negative sample augmentation**: Generate synthetic background-only samples for false positive testing
+- [ ] **Confidence calibration**: Improve confidence scores based on spike density and temporal consistency
+- [ ] **Multi-scale detection**: Support satellites at varying distances/apparent sizes
+- [ ] **Online learning**: Adapt STDP weights during inference for domain shift
+
+### Medium-Term Goals
+
+- [ ] **GPU-accelerated STDP**: CUDA kernels for faster training
+- [ ] **Streaming inference API**: Process continuous event streams without batching
+- [ ] **ROS2 integration**: Publish detections as ROS messages for robotics applications
+- [ ] **ONNX export**: Deploy to edge devices and neuromorphic hardware
+
+### Long-Term Vision
+
+- [ ] **Neuromorphic hardware deployment**: Intel Loihi, IBM TrueNorth, SynSense Speck
+- [ ] **Multi-sensor fusion**: Combine event cameras with traditional sensors
+- [ ] **Orbital mechanics integration**: Use Keplerian elements for trajectory prediction
+- [ ] **Comprehensive benchmark suite**: Standardized evaluation across multiple datasets
+
+### Community Contributions Welcome
+
+We welcome contributions in the following areas:
+
+1. **Additional datasets**: Event camera recordings from other sources
+2. **Performance benchmarks**: FPS/latency measurements on various hardware
+3. **Bug reports**: Issues with specific edge cases or data formats
+4. **Documentation**: Tutorials, examples, and translations
 
 ---
 
