@@ -443,6 +443,11 @@ def visualize_3d_trajectory(
         traj_y = np.asarray(trajectory['y']).flatten()
         traj_t = np.asarray(trajectory['t']).flatten()
 
+        # EBSSA original resolution is typically 240x180, scale to input resolution
+        orig_w, orig_h = 240, 180  # DAVIS sensor resolution
+        scale_x_traj = W_input / orig_w
+        scale_y_traj = H_input / orig_h
+
         # Normalize trajectory time to [0, T_input-1] range
         if len(traj_t) > 0:
             t_min, t_max = traj_t.min(), traj_t.max()
@@ -452,9 +457,12 @@ def visualize_3d_trajectory(
                 traj_t_norm = np.zeros_like(traj_t)
 
             for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
-                if 0 <= tx < W_input and 0 <= ty < H_input:
-                    gt_x.append(float(tx))
-                    gt_y.append(float(ty))
+                # Scale coordinates to input resolution
+                tx_scaled = tx * scale_x_traj
+                ty_scaled = ty * scale_y_traj
+                if 0 <= tx_scaled < W_input and 0 <= ty_scaled < H_input:
+                    gt_x.append(float(tx_scaled))
+                    gt_y.append(float(ty_scaled))
                     gt_t.append(float(tt))
     elif label is not None:
         # Fallback: Use label mask - shows satellite from events
@@ -648,6 +656,11 @@ def animate_3d_trajectory(
         traj_y = np.asarray(trajectory['y']).flatten()
         traj_t = np.asarray(trajectory['t']).flatten()
 
+        # EBSSA original resolution is typically 240x180, scale to input resolution
+        orig_w, orig_h = 240, 180  # DAVIS sensor resolution
+        scale_x_traj = W_input / orig_w
+        scale_y_traj = H_input / orig_h
+
         # Normalize trajectory time to [0, T_input-1] range
         if len(traj_t) > 0:
             t_min, t_max = traj_t.min(), traj_t.max()
@@ -659,11 +672,12 @@ def animate_3d_trajectory(
             # Bin trajectory points into timesteps
             for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
                 t_bin = int(np.clip(tt, 0, T_input - 1))
-                # Scale coordinates if needed (trajectory might be in different resolution)
-                # Assume trajectory is in same resolution as input
-                if 0 <= tx < W_input and 0 <= ty < H_input:
-                    gt_per_timestep[t_bin]['x'].append(float(tx))
-                    gt_per_timestep[t_bin]['y'].append(float(ty))
+                # Scale coordinates to input resolution
+                tx_scaled = tx * scale_x_traj
+                ty_scaled = ty * scale_y_traj
+                if 0 <= tx_scaled < W_input and 0 <= ty_scaled < H_input:
+                    gt_per_timestep[t_bin]['x'].append(float(tx_scaled))
+                    gt_per_timestep[t_bin]['y'].append(float(ty_scaled))
     elif label is not None:
         # Fallback to label mask if no trajectory
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
