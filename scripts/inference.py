@@ -368,6 +368,140 @@ def visualize_detections(
     plt.close()
 
 
+def create_tracking_video(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    trajectory: Optional[dict] = None,
+    label: Optional[torch.Tensor] = None,
+    output_path: str = "tracking_video.gif",
+    fps: int = 5,
+):
+    """
+    Create a 2D video showing bounding boxes tracking the satellite frame by frame.
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
+        label: Ground truth mask (H, W)
+        output_path: Path to save video (.gif or .mp4)
+        fps: Frames per second
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
+    # Get events per timestep
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]
+    if events_np.ndim == 4:
+        events_np = events_np.sum(axis=1)  # Sum channels -> (T, H, W)
+
+    T, H, W = events_np.shape
+
+    # Get predictions per timestep
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+    scale_y = H / H_pred
+    scale_x = W / W_pred
+    offset = 12
+
+    # Get trajectory if available
+    traj_per_frame = {t: [] for t in range(T)}
+    if trajectory is not None and trajectory.get('x') is not None:
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
+
+        # Scale to input resolution
+        orig_w, orig_h = 240, 180
+        scale_x_traj = W / orig_w
+        scale_y_traj = H / orig_h
+
+        if len(traj_t) > 0:
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T - 1)
+                for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                    t_bin = int(np.clip(tt, 0, T - 1))
+                    traj_per_frame[t_bin].append((tx * scale_x_traj, ty * scale_y_traj))
+
+    # Get detection boxes per frame
+    boxes_per_frame = {t: [] for t in range(T)}
+    for t in range(min(T_pred, T)):
+        spike_map = pred_np[t]
+        if spike_map.sum() > 0:
+            from scipy import ndimage
+            binary_map = (spike_map > 0).astype(np.uint8)
+            labeled, num = ndimage.label(binary_map)
+            for i in range(1, num + 1):
+                coords = np.where(labeled == i)
+                if len(coords[0]) >= 1:
+                    y_min = coords[0].min() * scale_y + offset
+                    y_max = (coords[0].max() + 1) * scale_y + offset
+                    x_min = coords[1].min() * scale_x + offset
+                    x_max = (coords[1].max() + 1) * scale_x + offset
+                    boxes_per_frame[t].append((x_min, y_min, x_max - x_min, y_max - y_min))
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    def update(frame):
+        ax.clear()
+
+        # Show accumulated events up to this frame (motion trail effect)
+        accumulated = np.sum(events_np[max(0, frame-3):frame+1], axis=0)
+        ax.imshow(accumulated, cmap='gray', vmin=0, vmax=accumulated.max() + 0.1)
+
+        # Draw ground truth trajectory point (cyan dot)
+        if traj_per_frame[frame]:
+            for (tx, ty) in traj_per_frame[frame]:
+                ax.plot(tx, ty, 'co', markersize=15, markeredgewidth=2, markerfacecolor='none', label='Ground Truth')
+
+        # Draw detection boxes (green)
+        for (x, y, w, h) in boxes_per_frame[frame]:
+            rect = patches.Rectangle((x, y), w, h, linewidth=3, edgecolor='lime', facecolor='none')
+            ax.add_patch(rect)
+            ax.plot(x + w/2, y + h/2, 'g+', markersize=15, markeredgewidth=3)
+
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+        ax.set_title(f'Frame {frame}/{T-1} | Detections: {len(boxes_per_frame[frame])}', fontsize=14, color='white')
+        ax.set_facecolor('black')
+        ax.axis('off')
+        fig.set_facecolor('black')
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=T, interval=1000//fps, blit=False)
+
+    print(f"Saving tracking video to {output_path}...")
+    writer = PillowWriter(fps=fps)
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+    print(f"Tracking video saved: {output_path}")
+
+    plt.close()
+    return anim
+
+
 def visualize_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
@@ -888,6 +1022,7 @@ def main():
     parser.add_argument('--visualize', action='store_true', help='Save 2D visualization images')
     parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
+    parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -935,7 +1070,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d) and i < 10
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and i < 10
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1009,6 +1144,32 @@ def main():
                     title=f'Sample {i}: Satellite Detection (Animated)',
                     fps=args.animation_fps,
                     trail_length=args.animation_trail,
+                )
+
+            if args.tracking_video and i < 10:  # 2D tracking video with bounding boxes
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': obj['x'] if 'x' in obj.dtype.names else None,
+                                    'y': obj['y'] if 'y' in obj.dtype.names else None,
+                                    't': obj['ts'] if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory: {e}")
+
+                create_tracking_video(
+                    x, raw_spikes,
+                    trajectory=trajectory,
+                    label=label,
+                    output_path=f'tracking_sample_{i:03d}.gif',
+                    fps=args.animation_fps,
                 )
 
             if (i + 1) % 10 == 0:
