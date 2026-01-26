@@ -900,6 +900,9 @@ def main():
         for i in range(len(dataset)):
             x, label = dataset[i]
 
+            # Initialize trajectory for this sample
+            trajectory = None
+
             # x is (T, C, H, W), need (T, B, C, H, W)
             x = x.unsqueeze(1)
 
