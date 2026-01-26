@@ -663,7 +663,7 @@ def animate_3d_trajectory(
 
         # Normalize trajectory time to [0, T_input-1] range
         if len(traj_t) > 0:
-            t_min, t_max = traj_t.min(), traj_t.max()
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
             if t_max > t_min:
                 traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
             else:
@@ -671,13 +671,13 @@ def animate_3d_trajectory(
 
             # Bin trajectory points into timesteps
             for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
-                t_bin = int(np.clip(tt, 0, T_input - 1))
+                t_bin = int(np.clip(float(tt), 0, T_input - 1))
                 # Scale coordinates to input resolution
-                tx_scaled = tx * scale_x_traj
-                ty_scaled = ty * scale_y_traj
+                tx_scaled = float(tx) * scale_x_traj
+                ty_scaled = float(ty) * scale_y_traj
                 if 0 <= tx_scaled < W_input and 0 <= ty_scaled < H_input:
-                    gt_per_timestep[t_bin]['x'].append(float(tx_scaled))
-                    gt_per_timestep[t_bin]['y'].append(float(ty_scaled))
+                    gt_per_timestep[t_bin]['x'].append(tx_scaled)
+                    gt_per_timestep[t_bin]['y'].append(ty_scaled)
     elif label is not None:
         # Fallback to label mask if no trajectory
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
