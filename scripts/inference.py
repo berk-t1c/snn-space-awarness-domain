@@ -377,7 +377,10 @@ def create_tracking_video(
     fps: int = 5,
 ):
     """
-    Create a 2D video showing bounding boxes tracking the satellite frame by frame.
+    Create a 2D video showing real event camera data with bounding boxes tracking satellite.
+
+    Shows the actual sparse event data accumulated over sliding windows, making the
+    satellite visible as a bright moving blob against the static star background.
 
     Args:
         events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
@@ -390,6 +393,7 @@ def create_tracking_video(
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
     from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.colors import LinearSegmentedColormap
 
     def safe_flatten(arr):
         """Safely flatten nested MATLAB arrays."""
@@ -403,16 +407,25 @@ def create_tracking_video(
                 break
         return arr.ravel().astype(float)
 
-    # Get events per timestep
+    # Get events per timestep - keep both polarities for visualization
     events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
     if events_np.ndim == 5:
-        events_np = events_np[:, 0, :, :, :]
-    if events_np.ndim == 4:
-        events_np = events_np.sum(axis=1)  # Sum channels -> (T, H, W)
+        events_np = events_np[:, 0, :, :, :]  # (T, C, H, W)
 
-    T, H, W = events_np.shape
+    # Separate positive and negative events if we have 2 channels
+    if events_np.ndim == 4 and events_np.shape[1] >= 2:
+        pos_events = events_np[:, 0, :, :]  # ON events
+        neg_events = events_np[:, 1, :, :]  # OFF events
+        combined = pos_events + neg_events  # Combined for visualization
+    else:
+        if events_np.ndim == 4:
+            combined = events_np.sum(axis=1)
+        else:
+            combined = events_np
 
-    # Get predictions per timestep
+    T, H, W = combined.shape
+
+    # Get predictions
     pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
     if pred_np.ndim == 5:
         pred_np = pred_np[:, 0, :, :, :]
@@ -424,14 +437,15 @@ def create_tracking_video(
     scale_x = W / W_pred
     offset = 12
 
-    # Get trajectory if available
+    # Get trajectory positions per frame
     traj_per_frame = {t: [] for t in range(T)}
+    avg_traj_per_frame = {}  # Average position per frame for bounding box
+
     if trajectory is not None and trajectory.get('x') is not None:
         traj_x = safe_flatten(trajectory['x'])
         traj_y = safe_flatten(trajectory['y'])
         traj_t = safe_flatten(trajectory['t'])
 
-        # Scale to input resolution
         orig_w, orig_h = 240, 180
         scale_x_traj = W / orig_w
         scale_y_traj = H / orig_h
@@ -444,8 +458,15 @@ def create_tracking_video(
                     t_bin = int(np.clip(tt, 0, T - 1))
                     traj_per_frame[t_bin].append((tx * scale_x_traj, ty * scale_y_traj))
 
-    # Get detection boxes per frame
-    boxes_per_frame = {t: [] for t in range(T)}
+        # Compute average trajectory position per frame
+        for t in range(T):
+            if traj_per_frame[t]:
+                xs = [p[0] for p in traj_per_frame[t]]
+                ys = [p[1] for p in traj_per_frame[t]]
+                avg_traj_per_frame[t] = (np.mean(xs), np.mean(ys))
+
+    # Get network detection boxes per frame (from spike locations)
+    detection_boxes = {t: [] for t in range(T)}
     for t in range(min(T_pred, T)):
         spike_map = pred_np[t]
         if spike_map.sum() > 0:
@@ -459,35 +480,79 @@ def create_tracking_video(
                     y_max = (coords[0].max() + 1) * scale_y + offset
                     x_min = coords[1].min() * scale_x + offset
                     x_max = (coords[1].max() + 1) * scale_x + offset
-                    boxes_per_frame[t].append((x_min, y_min, x_max - x_min, y_max - y_min))
+                    cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+                    detection_boxes[t].append({'box': (x_min, y_min, x_max - x_min, y_max - y_min), 'center': (cx, cy)})
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 8))
+    # Create custom colormap: black -> blue -> white (for event intensity)
+    colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
+    event_cmap = LinearSegmentedColormap.from_list('events', colors)
+
+    # Create figure with dark theme
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
 
     def update(frame):
         ax.clear()
+        ax.set_facecolor('black')
 
-        # Show accumulated events up to this frame (motion trail effect)
-        accumulated = np.sum(events_np[max(0, frame-3):frame+1], axis=0)
-        ax.imshow(accumulated, cmap='gray', vmin=0, vmax=accumulated.max() + 0.1)
+        # Accumulate events over sliding window (5 frames) for visibility
+        window = 5
+        start = max(0, frame - window + 1)
+        accumulated = np.sum(combined[start:frame+1], axis=0)
 
-        # Draw ground truth trajectory point (cyan dot)
-        if traj_per_frame[frame]:
-            for (tx, ty) in traj_per_frame[frame]:
-                ax.plot(tx, ty, 'co', markersize=15, markeredgewidth=2, markerfacecolor='none', label='Ground Truth')
+        # Normalize and enhance contrast
+        if accumulated.max() > 0:
+            accumulated = accumulated / accumulated.max()
 
-        # Draw detection boxes (green)
-        for (x, y, w, h) in boxes_per_frame[frame]:
-            rect = patches.Rectangle((x, y), w, h, linewidth=3, edgecolor='lime', facecolor='none')
+        # Show events
+        ax.imshow(accumulated, cmap=event_cmap, vmin=0, vmax=1, interpolation='nearest')
+
+        # Draw ground truth bounding box (cyan) - centered on trajectory
+        box_size = 20  # pixels
+        if frame in avg_traj_per_frame:
+            cx, cy = avg_traj_per_frame[frame]
+            # Draw cyan bounding box around GT position
+            gt_rect = patches.Rectangle(
+                (cx - box_size/2, cy - box_size/2), box_size, box_size,
+                linewidth=2, edgecolor='cyan', facecolor='none', linestyle='--',
+                label='Ground Truth'
+            )
+            ax.add_patch(gt_rect)
+            # Draw cyan crosshair
+            ax.plot(cx, cy, 'c+', markersize=12, markeredgewidth=2)
+
+        # Draw network detection boxes (green/lime)
+        for det in detection_boxes[frame]:
+            x, y, w, h = det['box']
+            rect = patches.Rectangle(
+                (x, y), w, h,
+                linewidth=3, edgecolor='lime', facecolor='none',
+                label='Detection'
+            )
             ax.add_patch(rect)
-            ax.plot(x + w/2, y + h/2, 'g+', markersize=15, markeredgewidth=3)
+            cx, cy = det['center']
+            ax.plot(cx, cy, 'g+', markersize=15, markeredgewidth=3)
+
+        # Draw trajectory trail (last 5 frames)
+        trail_frames = range(max(0, frame-5), frame+1)
+        trail_x, trail_y = [], []
+        for tf in trail_frames:
+            if tf in avg_traj_per_frame:
+                trail_x.append(avg_traj_per_frame[tf][0])
+                trail_y.append(avg_traj_per_frame[tf][1])
+        if len(trail_x) > 1:
+            ax.plot(trail_x, trail_y, 'c-', linewidth=1, alpha=0.5)
 
         ax.set_xlim(0, W)
         ax.set_ylim(H, 0)
-        ax.set_title(f'Frame {frame}/{T-1} | Detections: {len(boxes_per_frame[frame])}', fontsize=14, color='white')
-        ax.set_facecolor('black')
+
+        # Title with info
+        n_det = len(detection_boxes[frame])
+        has_gt = frame in avg_traj_per_frame
+        title = f'Frame {frame+1}/{T} | Events: Accumulated | '
+        title += f'Detection: {"YES" if n_det > 0 else "NO"} | GT: {"visible" if has_gt else "none"}'
+        ax.set_title(title, fontsize=12, color='white', pad=10)
         ax.axis('off')
-        fig.set_facecolor('black')
 
         return []
 
@@ -495,7 +560,7 @@ def create_tracking_video(
 
     print(f"Saving tracking video to {output_path}...")
     writer = PillowWriter(fps=fps)
-    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black'})
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black', 'edgecolor': 'none'})
     print(f"Tracking video saved: {output_path}")
 
     plt.close()
