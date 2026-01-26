@@ -434,11 +434,30 @@ def visualize_3d_trajectory(
 
     pred_x, pred_y, pred_t = pred_raw_x, pred_raw_y, pred_raw_t
 
-    # Extract GROUND TRUTH from label mask (shows only the target satellite, not all objects)
+    # Extract GROUND TRUTH - use actual trajectory if available
     gt_x, gt_y, gt_t = [], [], []
 
-    if label is not None:
-        # Use label mask - this shows only the satellite the network was trained to detect
+    if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
+        # Use actual object trajectory (most accurate!)
+        traj_x = np.asarray(trajectory['x']).flatten()
+        traj_y = np.asarray(trajectory['y']).flatten()
+        traj_t = np.asarray(trajectory['t']).flatten()
+
+        # Normalize trajectory time to [0, T_input-1] range
+        if len(traj_t) > 0:
+            t_min, t_max = traj_t.min(), traj_t.max()
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+            else:
+                traj_t_norm = np.zeros_like(traj_t)
+
+            for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                if 0 <= tx < W_input and 0 <= ty < H_input:
+                    gt_x.append(float(tx))
+                    gt_y.append(float(ty))
+                    gt_t.append(float(tt))
+    elif label is not None:
+        # Fallback: Use label mask - shows satellite from events
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
         if label_np.ndim == 2:
             for t in range(T_input):
@@ -564,6 +583,7 @@ def animate_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
     label: Optional[torch.Tensor] = None,
+    trajectory: Optional[dict] = None,
     output_path: Optional[str] = None,
     title: str = "Satellite Detection",
     fps: int = 10,
@@ -581,7 +601,8 @@ def animate_3d_trajectory(
     Args:
         events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
         predictions: Model output spikes (T, B, C, H, W)
-        label: Ground truth mask (H, W)
+        label: Ground truth mask (H, W) - fallback if no trajectory
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
         output_path: Path to save animation (.gif or .mp4)
         title: Animation title
         fps: Frames per second for saved animation
@@ -621,7 +642,30 @@ def animate_3d_trajectory(
     # Extract ground truth coordinates per timestep
     gt_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
 
-    if label is not None:
+    # Use actual trajectory data if available (much more accurate!)
+    if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
+        traj_x = np.asarray(trajectory['x']).flatten()
+        traj_y = np.asarray(trajectory['y']).flatten()
+        traj_t = np.asarray(trajectory['t']).flatten()
+
+        # Normalize trajectory time to [0, T_input-1] range
+        if len(traj_t) > 0:
+            t_min, t_max = traj_t.min(), traj_t.max()
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
+            else:
+                traj_t_norm = np.zeros_like(traj_t)
+
+            # Bin trajectory points into timesteps
+            for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                t_bin = int(np.clip(tt, 0, T_input - 1))
+                # Scale coordinates if needed (trajectory might be in different resolution)
+                # Assume trajectory is in same resolution as input
+                if 0 <= tx < W_input and 0 <= ty < H_input:
+                    gt_per_timestep[t_bin]['x'].append(float(tx))
+                    gt_per_timestep[t_bin]['y'].append(float(ty))
+    elif label is not None:
+        # Fallback to label mask if no trajectory
         label_np = label.cpu().numpy() if isinstance(label, torch.Tensor) else label
         if label_np.ndim == 2:
             for t in range(T_input):
@@ -896,8 +940,26 @@ def main():
                 )
 
             if args.animate_3d and i < 10:  # Animated 3D visualization
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': np.asarray(obj['x']).flatten() if 'x' in obj.dtype.names else None,
+                                    'y': np.asarray(obj['y']).flatten() if 'y' in obj.dtype.names else None,
+                                    't': np.asarray(obj['ts']).flatten() if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory for animation: {e}")
+
                 animate_3d_trajectory(
                     x, raw_spikes, label,
+                    trajectory=trajectory,
                     output_path=f'animation_sample_{i:03d}.gif',
                     title=f'Sample {i}: Satellite Detection (Animated)',
                     fps=args.animation_fps,
