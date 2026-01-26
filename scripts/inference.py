@@ -439,9 +439,10 @@ def visualize_3d_trajectory(
 
     if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
         # Use actual object trajectory (most accurate!)
-        traj_x = np.asarray(trajectory['x']).flatten()
-        traj_y = np.asarray(trajectory['y']).flatten()
-        traj_t = np.asarray(trajectory['t']).flatten()
+        # Flatten and ensure 1D arrays (handle nested MATLAB structures)
+        traj_x = np.asarray(trajectory['x']).ravel().astype(float)
+        traj_y = np.asarray(trajectory['y']).ravel().astype(float)
+        traj_t = np.asarray(trajectory['t']).ravel().astype(float)
 
         # EBSSA original resolution is typically 240x180, scale to input resolution
         orig_w, orig_h = 240, 180  # DAVIS sensor resolution
@@ -450,7 +451,7 @@ def visualize_3d_trajectory(
 
         # Normalize trajectory time to [0, T_input-1] range
         if len(traj_t) > 0:
-            t_min, t_max = traj_t.min(), traj_t.max()
+            t_min, t_max = traj_t.min().item(), traj_t.max().item()
             if t_max > t_min:
                 traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
             else:
@@ -652,9 +653,10 @@ def animate_3d_trajectory(
 
     # Use actual trajectory data if available (much more accurate!)
     if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
-        traj_x = np.asarray(trajectory['x']).flatten()
-        traj_y = np.asarray(trajectory['y']).flatten()
-        traj_t = np.asarray(trajectory['t']).flatten()
+        # Flatten and ensure 1D arrays (handle nested MATLAB structures)
+        traj_x = np.asarray(trajectory['x']).ravel().astype(float)
+        traj_y = np.asarray(trajectory['y']).ravel().astype(float)
+        traj_t = np.asarray(trajectory['t']).ravel().astype(float)
 
         # EBSSA original resolution is typically 240x180, scale to input resolution
         orig_w, orig_h = 240, 180  # DAVIS sensor resolution
@@ -663,7 +665,7 @@ def animate_3d_trajectory(
 
         # Normalize trajectory time to [0, T_input-1] range
         if len(traj_t) > 0:
-            t_min, t_max = float(traj_t.min()), float(traj_t.max())
+            t_min, t_max = traj_t.min().item(), traj_t.max().item()
             if t_max > t_min:
                 traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T_input - 1)
             else:
