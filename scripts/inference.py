@@ -575,8 +575,8 @@ def animate_3d_trajectory(
 
     Creates a frame-by-frame animation where:
     - Ground truth points (blue dots) appear sequentially over time
-    - Network output (red stars) appear when the network detects the satellite
-    - Optional trail effect shows recent history
+    - Network output (red stars) appear along the trajectory where detected
+    - Both blue and red dots build up together over time
 
     Args:
         events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
@@ -630,34 +630,35 @@ def animate_3d_trajectory(
                 gt_per_timestep[t]['x'] = xs.tolist()
                 gt_per_timestep[t]['y'] = ys.tolist()
 
-    # Extract prediction coordinates per timestep (aligned to GT)
-    pred_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
-
-    # For each prediction timestep, find if there are detections
+    # Get raw prediction locations (spatial detections)
+    pred_raw_x, pred_raw_y = [], []
     for t in range(T_pred):
         ys, xs = np.where(pred_np[t] > 0)
-        if len(xs) > 0:
-            # Scale predictions to input space
-            for y, x in zip(ys, xs):
-                px = x * scale_x + offset
-                py = y * scale_y + offset
+        for y, x in zip(ys, xs):
+            pred_raw_x.append(x * scale_x + offset)
+            pred_raw_y.append(y * scale_y + offset)
 
-                # Find closest GT point at this timestep to align the detection
-                if gt_per_timestep[t]['x']:
-                    gt_xs = np.array(gt_per_timestep[t]['x'])
-                    gt_ys = np.array(gt_per_timestep[t]['y'])
-                    dists = np.sqrt((gt_xs - px)**2 + (gt_ys - py)**2)
-                    min_idx = np.argmin(dists)
-                    if dists[min_idx] < 30:  # Within detection radius
-                        pred_per_timestep[t]['x'].append(gt_xs[min_idx])
-                        pred_per_timestep[t]['y'].append(gt_ys[min_idx])
-                    else:
-                        # Use prediction location if no close GT
-                        pred_per_timestep[t]['x'].append(px)
-                        pred_per_timestep[t]['y'].append(py)
-                else:
-                    pred_per_timestep[t]['x'].append(px)
-                    pred_per_timestep[t]['y'].append(py)
+    # Align predictions with GT trajectory - spread red stars along detected trajectory
+    # For each GT point, check if it's near any detection and mark it as "detected"
+    pred_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
+    detection_radius = 30  # pixels
+
+    if pred_raw_x:
+        pred_raw_x_arr = np.array(pred_raw_x)
+        pred_raw_y_arr = np.array(pred_raw_y)
+
+        for t in range(T_input):
+            if gt_per_timestep[t]['x']:
+                gt_xs = np.array(gt_per_timestep[t]['x'])
+                gt_ys = np.array(gt_per_timestep[t]['y'])
+
+                # For each GT point at this timestep, check if any detection is nearby
+                for gx, gy in zip(gt_xs, gt_ys):
+                    dists = np.sqrt((pred_raw_x_arr - gx)**2 + (pred_raw_y_arr - gy)**2)
+                    if np.min(dists) < detection_radius:
+                        # This GT point is near a detection - mark it as detected
+                        pred_per_timestep[t]['x'].append(gx)
+                        pred_per_timestep[t]['y'].append(gy)
 
     # Create figure with dark background
     plt.style.use('dark_background')
