@@ -322,7 +322,7 @@ class DecoderTransConv2d(nn.Module):
             if self.membrane is None or self.membrane.shape != out.shape:
                 self.membrane = torch.zeros_like(out)
             
-            spikes, self.membrane = self.neuron(out, self.membrane)
+            spikes, self.membrane, _ = self.neuron(out, self.membrane)
             return spikes
         
         return out
