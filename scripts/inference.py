@@ -396,6 +396,19 @@ def visualize_3d_trajectory(
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
 
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        # Recursively unwrap nested object arrays
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
     # Get input events
     events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
     if events_np.ndim == 5:
@@ -440,9 +453,9 @@ def visualize_3d_trajectory(
     if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
         # Use actual object trajectory (most accurate!)
         # Flatten and ensure 1D arrays (handle nested MATLAB structures)
-        traj_x = np.asarray(trajectory['x']).ravel().astype(float)
-        traj_y = np.asarray(trajectory['y']).ravel().astype(float)
-        traj_t = np.asarray(trajectory['t']).ravel().astype(float)
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
 
         # EBSSA original resolution is typically 240x180, scale to input resolution
         orig_w, orig_h = 240, 180  # DAVIS sensor resolution
@@ -625,6 +638,19 @@ def animate_3d_trajectory(
     from mpl_toolkits.mplot3d import Axes3D
     from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
 
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        # Recursively unwrap nested object arrays
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
     # Get input events
     events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
     if events_np.ndim == 5:
@@ -654,9 +680,9 @@ def animate_3d_trajectory(
     # Use actual trajectory data if available (much more accurate!)
     if trajectory is not None and trajectory.get('x') is not None and trajectory.get('t') is not None:
         # Flatten and ensure 1D arrays (handle nested MATLAB structures)
-        traj_x = np.asarray(trajectory['x']).ravel().astype(float)
-        traj_y = np.asarray(trajectory['y']).ravel().astype(float)
-        traj_t = np.asarray(trajectory['t']).ravel().astype(float)
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
 
         # EBSSA original resolution is typically 240x180, scale to input resolution
         orig_w, orig_h = 240, 180  # DAVIS sensor resolution
