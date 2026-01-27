@@ -1185,6 +1185,7 @@ def main():
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
+    parser.add_argument('--max-vis', type=int, default=10, help='Max samples to visualize (default: 10, use -1 for all)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--split', default='all', choices=['train', 'val', 'test', 'all'],
                         help='Dataset split to use (default: all)')
@@ -1230,7 +1231,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and i < 10
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and (args.max_vis < 0 or i < args.max_vis)
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1248,13 +1249,13 @@ def main():
             }
             results.append(result)
 
-            if args.visualize and i < 10:  # 2D visualization
+            if args.visualize and (args.max_vis < 0 or i < args.max_vis):  # 2D visualization
                 visualize_detections(
                     x, boxes, label,
                     output_path=f'detection_{i:03d}.png'
                 )
 
-            if args.visualize_3d and i < 10:  # 3D paper-style visualization
+            if args.visualize_3d and (args.max_vis < 0 or i < args.max_vis):  # 3D paper-style visualization
                 # Try to get actual trajectory from dataset
                 trajectory = None
                 try:
@@ -1279,7 +1280,7 @@ def main():
                     title=f'Sample {i}: Satellite Trajectory'
                 )
 
-            if args.animate_3d and i < 10:  # Animated 3D visualization
+            if args.animate_3d and (args.max_vis < 0 or i < args.max_vis):  # Animated 3D visualization
                 # Load trajectory if not already loaded
                 if trajectory is None:
                     try:
@@ -1306,7 +1307,7 @@ def main():
                     trail_length=args.animation_trail,
                 )
 
-            if args.tracking_video and i < 10:  # 2D tracking video with bounding boxes
+            if args.tracking_video and (args.max_vis < 0 or i < args.max_vis):  # 2D tracking video with bounding boxes
                 # Load trajectory if not already loaded
                 if trajectory is None:
                     try:
