@@ -211,10 +211,10 @@ class SyntheticDataGenerator:
         
         # Then add noise (realistic event camera noise model)
         if noise_level > 0:
-            # 1. HOT PIXELS: Always fire (sensor defects)
-            hot_pixel_intensity = torch.rand(self.H, self.W) * 0.3 + 0.2  # 0.2-0.5 intensity
-            frame[0] = torch.clamp(frame[0] + self.hot_pixels.float() * hot_pixel_intensity * 0.3, 0, 1)
-            frame[1] = torch.clamp(frame[1] + self.hot_pixels.float() * hot_pixel_intensity * 0.8, 0, 1)
+            # 1. HOT PIXELS: Always fire (sensor defects) - weak intensity
+            hot_pixel_intensity = torch.rand(self.H, self.W) * 0.15 + 0.1  # 0.1-0.25 intensity
+            frame[0] = torch.clamp(frame[0] + self.hot_pixels.float() * hot_pixel_intensity * 0.2, 0, 1)
+            frame[1] = torch.clamp(frame[1] + self.hot_pixels.float() * hot_pixel_intensity * 0.5, 0, 1)
             
             # 2. BACKGROUND ACTIVITY: Poisson-distributed random events
             # Rate parameter scales with noise_level and spatial bias
@@ -226,10 +226,13 @@ class SyntheticDataGenerator:
             
             # 3. SHOT NOISE: Intensity varies (Poisson-like amplitude)
             # Higher noise = more variation in intensity
-            base_intensity = 0.2 + 0.4 * noise_level
-            # Exponential distribution better models shot noise than uniform
-            noise_intensity = torch.zeros(self.H, self.W).exponential_(1.0 / base_intensity)
-            noise_intensity = torch.clamp(noise_intensity, 0, 1.0)  # Cap at max
+            base_intensity = 0.15 + 0.25 * noise_level  # 0.15 at low, 0.4 at high
+            # Use scaled uniform + small exponential tail for realistic shot noise
+            noise_intensity = torch.rand(self.H, self.W) * base_intensity
+            # Add occasional bright outliers (shot noise spikes) - 5% chance
+            bright_mask = torch.rand(self.H, self.W) < 0.05
+            noise_intensity = torch.where(bright_mask, noise_intensity * 2.0, noise_intensity)
+            noise_intensity = torch.clamp(noise_intensity, 0, 0.8)  # Cap below signal max
             
             # 4. TEMPORAL CORRELATION: Some noise pixels are "sticky" (repeat)
             # This is handled implicitly by hot pixels
