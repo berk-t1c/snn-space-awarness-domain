@@ -1536,6 +1536,10 @@ def main():
         )
         print(f"Dataset ({args.split} split, ratio={args.train_ratio}): {len(dataset)} samples")
 
+        # Initialize state for cross-sequence HULK/SMASH tracking
+        previous_objects = None
+        track_history = []  # Track object IDs across sequences
+
         for i in range(len(dataset)):
             x, label = dataset[i]
 
@@ -1675,23 +1679,45 @@ def main():
                     fps=args.animation_fps,
                 )
 
-            if args.hulk_tracking and i < 10:  # HULK/SMASH instance segmentation
+            if args.hulk_tracking and (args.max_vis < 0 or i < args.max_vis):  # HULK/SMASH instance segmentation
                 print(f"\nSample {i}: Running HULK/SMASH tracking...")
-                hulk_result = run_hulk_smash_tracking(model, x, device)
+                hulk_result = run_hulk_smash_tracking(
+                    model, x, device,
+                    previous_objects=previous_objects  # Link to previous for tracking!
+                )
 
                 print(f"  Classification spikes: {hulk_result['n_spikes']}")
                 print(f"  Instances found: {len(hulk_result['instances'])}")
                 print(f"  Objects after grouping: {len(hulk_result['objects'])}")
 
+                # Show cross-sequence matches
+                if hulk_result['matches']:
+                    print(f"  Cross-sequence matches: {hulk_result['matches']}")
+                    for curr_id, prev_id in hulk_result['matches'].items():
+                        print(f"    Object {curr_id} ← matched to previous Object {prev_id}")
+                elif previous_objects:
+                    print(f"  No matches to previous {len(previous_objects)} objects")
+
                 if hulk_result['objects']:
                     for obj in hulk_result['objects']:
                         print(f"    Object {obj.object_id}: {obj.n_instances} instances, bbox={obj.combined_bbox}")
+
+                # Update tracking state for next iteration
+                previous_objects = hulk_result['objects'] if hulk_result['objects'] else None
+
+                # Track history
+                track_history.append({
+                    'sample': i,
+                    'n_objects': len(hulk_result['objects']),
+                    'matches': hulk_result['matches']
+                })
 
                 # Add to results
                 result['hulk'] = {
                     'n_spikes': hulk_result['n_spikes'],
                     'n_instances': len(hulk_result['instances']),
                     'n_objects': len(hulk_result['objects']),
+                    'matches': hulk_result['matches'],
                     'objects': [
                         {
                             'id': obj.object_id,
@@ -1706,6 +1732,15 @@ def main():
                 print(f"Processed {i + 1}/{len(dataset)}")
 
         print(f"\nTotal detections: {sum(r['num_detections'] for r in results)}")
+
+        # Print HULK/SMASH tracking summary
+        if args.hulk_tracking and track_history:
+            total_matches = sum(len(h['matches']) for h in track_history)
+            print(f"\n=== HULK/SMASH Tracking Summary ===")
+            print(f"  Samples processed: {len(track_history)}")
+            print(f"  Total cross-sequence matches: {total_matches}")
+            if total_matches > 0:
+                print(f"  Tracking successful: Objects matched across sequences!")
 
     elif args.input:
         # Single file inference
