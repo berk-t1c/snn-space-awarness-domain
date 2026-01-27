@@ -1208,6 +1208,299 @@ def create_trajectory_video(
     return anim
 
 
+def create_continuous_tracking_video(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    trajectory: Optional[dict] = None,
+    label: Optional[torch.Tensor] = None,
+    output_path: str = "continuous_tracking.gif",
+    fps: int = 5,
+):
+    """
+    Create continuous tracking video showing interpolated tracking box on EVERY frame.
+
+    Unlike `create_tracking_video()` which only shows boxes where spikes occurred,
+    this function interpolates the tracking position between detections to show
+    a continuous tracking box that follows the satellite across all frames.
+
+    Color scheme:
+    - Cyan dashed box: Ground truth position (interpolated)
+    - Yellow/orange box: Interpolated tracking position (continuous)
+    - Green markers: Actual spike detection points
+    - Yellow trajectory line: Interpolated tracking path
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
+        label: Ground truth mask (H, W)
+        output_path: Path to save video (.gif or .mp4)
+        fps: Frames per second
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.colors import LinearSegmentedColormap
+
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
+    # Get events per timestep
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]  # (T, C, H, W)
+
+    if events_np.ndim == 4 and events_np.shape[1] >= 2:
+        pos_events = events_np[:, 0, :, :]
+        neg_events = events_np[:, 1, :, :]
+        combined = pos_events + neg_events
+    else:
+        if events_np.ndim == 4:
+            combined = events_np.sum(axis=1)
+        else:
+            combined = events_np
+
+    T, H, W = combined.shape
+
+    # Get predictions
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+    scale_y = H / H_pred
+    scale_x = W / W_pred
+    offset = 12
+
+    # Get GT trajectory positions (interpolated to all frames)
+    avg_traj_per_frame = {}
+    if trajectory is not None and trajectory.get('x') is not None:
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
+
+        orig_w, orig_h = 240, 180
+        scale_x_traj = W / orig_w
+        scale_y_traj = H / orig_h
+
+        if len(traj_t) > 0:
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T - 1)
+                traj_per_frame = {t: [] for t in range(T)}
+                for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                    t_bin = int(np.clip(tt, 0, T - 1))
+                    traj_per_frame[t_bin].append((tx * scale_x_traj, ty * scale_y_traj))
+
+                for t in range(T):
+                    if traj_per_frame[t]:
+                        xs = [p[0] for p in traj_per_frame[t]]
+                        ys = [p[1] for p in traj_per_frame[t]]
+                        avg_traj_per_frame[t] = (np.mean(xs), np.mean(ys))
+
+        # Interpolate GT trajectory to fill all frames
+        if avg_traj_per_frame:
+            known_frames = sorted(avg_traj_per_frame.keys())
+            if len(known_frames) >= 2:
+                for t in range(T):
+                    if t not in avg_traj_per_frame:
+                        prev_f = max([f for f in known_frames if f <= t], default=known_frames[0])
+                        next_f = min([f for f in known_frames if f >= t], default=known_frames[-1])
+                        if prev_f == next_f:
+                            avg_traj_per_frame[t] = avg_traj_per_frame[prev_f]
+                        else:
+                            alpha = (t - prev_f) / (next_f - prev_f)
+                            x_interp = avg_traj_per_frame[prev_f][0] + alpha * (avg_traj_per_frame[next_f][0] - avg_traj_per_frame[prev_f][0])
+                            y_interp = avg_traj_per_frame[prev_f][1] + alpha * (avg_traj_per_frame[next_f][1] - avg_traj_per_frame[prev_f][1])
+                            avg_traj_per_frame[t] = (x_interp, y_interp)
+
+    # Get actual spike detection locations with timestamps
+    detection_points = {}  # frame -> (cx, cy) for frames with actual spikes
+    spike_frames = []
+
+    for t in range(T_pred):
+        spike_map = pred_np[t]
+        if spike_map.sum() > 0:
+            from scipy import ndimage
+            binary_map = (spike_map > 0).astype(np.uint8)
+            labeled, num = ndimage.label(binary_map)
+
+            frame_detections = []
+            for i in range(1, num + 1):
+                coords = np.where(labeled == i)
+                if len(coords[0]) >= 1:
+                    y_min = coords[0].min() * scale_y + offset
+                    y_max = (coords[0].max() + 1) * scale_y + offset
+                    x_min = coords[1].min() * scale_x + offset
+                    x_max = (coords[1].max() + 1) * scale_x + offset
+                    cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+                    frame_detections.append((cx, cy))
+
+            if frame_detections:
+                t_scaled = int(round(t * (T / T_pred))) if T_pred > 0 else t
+                t_scaled = max(0, min(t_scaled, T - 1))
+                avg_x = np.mean([d[0] for d in frame_detections])
+                avg_y = np.mean([d[1] for d in frame_detections])
+                detection_points[t_scaled] = (avg_x, avg_y)
+                spike_frames.append(t_scaled)
+
+    print(f"  Continuous tracking: {len(detection_points)} actual detections at frames: {sorted(detection_points.keys())}")
+
+    # INTERPOLATE tracking positions for ALL frames
+    # This is the key difference - we create a tracking position for every frame
+    tracking_per_frame = {}  # frame -> (cx, cy) for ALL frames (interpolated)
+
+    if detection_points:
+        known_frames = sorted(detection_points.keys())
+
+        if len(known_frames) >= 2:
+            # Interpolate between detection points
+            for t in range(T):
+                if t in detection_points:
+                    # Use actual detection
+                    tracking_per_frame[t] = detection_points[t]
+                else:
+                    # Find surrounding detection frames
+                    prev_frames = [f for f in known_frames if f <= t]
+                    next_frames = [f for f in known_frames if f >= t]
+
+                    if prev_frames and next_frames:
+                        prev_f = max(prev_frames)
+                        next_f = min(next_frames)
+
+                        if prev_f == next_f:
+                            tracking_per_frame[t] = detection_points[prev_f]
+                        else:
+                            # Linear interpolation
+                            alpha = (t - prev_f) / (next_f - prev_f)
+                            x_interp = detection_points[prev_f][0] + alpha * (detection_points[next_f][0] - detection_points[prev_f][0])
+                            y_interp = detection_points[prev_f][1] + alpha * (detection_points[next_f][1] - detection_points[prev_f][1])
+                            tracking_per_frame[t] = (x_interp, y_interp)
+                    elif prev_frames:
+                        # Extrapolate from last known
+                        tracking_per_frame[t] = detection_points[max(prev_frames)]
+                    elif next_frames:
+                        # Extrapolate from first known
+                        tracking_per_frame[t] = detection_points[min(next_frames)]
+
+        elif len(known_frames) == 1:
+            # Single detection - use for all frames
+            single_pos = detection_points[known_frames[0]]
+            for t in range(T):
+                tracking_per_frame[t] = single_pos
+
+    print(f"  Interpolated tracking to {len(tracking_per_frame)}/{T} frames")
+
+    # Create colormap
+    colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
+    event_cmap = LinearSegmentedColormap.from_list('events', colors)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
+
+    def update(frame):
+        ax.clear()
+        ax.set_facecolor('black')
+
+        # Accumulate events for visibility
+        window = 5
+        start = max(0, frame - window + 1)
+        accumulated = np.sum(combined[start:frame+1], axis=0)
+
+        if accumulated.max() > 0:
+            accumulated = accumulated / accumulated.max()
+
+        ax.imshow(accumulated, cmap=event_cmap, vmin=0, vmax=1, interpolation='nearest')
+
+        # Draw GT bounding box (cyan dashed)
+        gt_box_size = 20
+        if frame in avg_traj_per_frame:
+            cx, cy = avg_traj_per_frame[frame]
+            gt_rect = patches.Rectangle(
+                (cx - gt_box_size/2, cy - gt_box_size/2), gt_box_size, gt_box_size,
+                linewidth=2, edgecolor='cyan', facecolor='none', linestyle='--',
+                label='Ground Truth'
+            )
+            ax.add_patch(gt_rect)
+
+        # Draw CONTINUOUS tracking box (yellow/orange) - this is the interpolated tracker
+        track_box_size = 25
+        is_actual_spike = frame in detection_points
+
+        if frame in tracking_per_frame:
+            cx, cy = tracking_per_frame[frame]
+
+            # Different style for actual spike vs interpolated
+            if is_actual_spike:
+                # Actual spike - bright green box with thick border
+                track_rect = patches.Rectangle(
+                    (cx - track_box_size/2, cy - track_box_size/2), track_box_size, track_box_size,
+                    linewidth=4, edgecolor='lime', facecolor='none',
+                    label='SNN Detection (actual)'
+                )
+                ax.add_patch(track_rect)
+                ax.plot(cx, cy, 'g+', markersize=18, markeredgewidth=4)
+            else:
+                # Interpolated - orange/yellow box
+                track_rect = patches.Rectangle(
+                    (cx - track_box_size/2, cy - track_box_size/2), track_box_size, track_box_size,
+                    linewidth=3, edgecolor='orange', facecolor='none', linestyle='-',
+                    label='Tracking (interpolated)'
+                )
+                ax.add_patch(track_rect)
+                ax.plot(cx, cy, 'o', color='orange', markersize=8)
+
+        # Draw tracking trajectory trail (last N frames)
+        trail_length = 10
+        trail_start = max(0, frame - trail_length)
+        for t in range(trail_start, frame):
+            if t in tracking_per_frame and t+1 in tracking_per_frame:
+                x1, y1 = tracking_per_frame[t]
+                x2, y2 = tracking_per_frame[t+1]
+                # Fade older parts of trail
+                alpha = 0.3 + 0.7 * (t - trail_start) / max(1, frame - trail_start)
+                ax.plot([x1, x2], [y1, y2], color='yellow', linewidth=2, alpha=alpha)
+
+        # Mark all past actual spike locations with small green dots
+        for t in spike_frames:
+            if t <= frame and t in detection_points:
+                x, y = detection_points[t]
+                ax.plot(x, y, 'go', markersize=5, alpha=0.6)
+
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+
+        # Title showing tracking status
+        status = "SPIKE!" if is_actual_spike else "tracking"
+        title = f'Frame {frame+1}/{T} | {status} | Detections: {len(spike_frames)}'
+        ax.set_title(title, fontsize=12, color='white', pad=10)
+        ax.axis('off')
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=T, interval=1000//fps, blit=False)
+
+    print(f"Saving continuous tracking video to {output_path}...")
+    writer = PillowWriter(fps=fps)
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black', 'edgecolor': 'none'})
+    print(f"Continuous tracking video saved: {output_path}")
+
+    plt.close()
+    return anim
+
+
 def animate_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
@@ -1497,6 +1790,7 @@ def main():
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
     parser.add_argument('--trajectory-video', action='store_true', help='Save HONEST trajectory video showing detection ONLY at spike frames')
+    parser.add_argument('--continuous-tracking', action='store_true', help='Save continuous tracking video with interpolated tracking box on every frame')
     parser.add_argument('--hulk-tracking', action='store_true', help='Use HULK/SMASH for instance segmentation and tracking')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
@@ -1546,7 +1840,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.trajectory_video) and (args.max_vis < 0 or i < args.max_vis)
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.trajectory_video or args.continuous_tracking) and (args.max_vis < 0 or i < args.max_vis)
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1672,6 +1966,33 @@ def main():
                     trajectory=trajectory,
                     label=label,
                     output_path=f'trajectory_sample_{i:03d}.gif',
+                    fps=args.animation_fps,
+                )
+
+            if args.continuous_tracking and (args.max_vis < 0 or i < args.max_vis):  # Continuous tracking video
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': obj['x'] if 'x' in obj.dtype.names else None,
+                                    'y': obj['y'] if 'y' in obj.dtype.names else None,
+                                    't': obj['ts'] if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory: {e}")
+
+                print(f"\nSample {i}: Generating continuous tracking video...")
+                create_continuous_tracking_video(
+                    x, raw_spikes,
+                    trajectory=trajectory,
+                    label=label,
+                    output_path=f'continuous_tracking_{i:03d}.gif',
                     fps=args.animation_fps,
                 )
 
