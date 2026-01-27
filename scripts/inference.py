@@ -225,6 +225,7 @@ def detect_satellites(
     device: torch.device,
     min_cluster_pixels: int = 2,
     return_spikes: bool = False,
+    return_pooling_indices: bool = False,
 ) -> List[BoundingBox]:
     """
     Run inference and return detected satellite bounding boxes.
@@ -235,10 +236,12 @@ def detect_satellites(
         device: Compute device
         min_cluster_pixels: Minimum cluster size to count as detection
         return_spikes: If True, also return raw classification spikes for visualization
+        return_pooling_indices: If True, also return pooling indices for HULK decoder
 
     Returns:
         List of BoundingBox for detected satellites
         If return_spikes=True: (boxes, classification_spikes)
+        If return_pooling_indices=True: (boxes, classification_spikes, pooling_indices)
     """
     model.eval()
 
@@ -258,6 +261,9 @@ def detect_satellites(
 
         # Store raw spikes for 3D visualization (T, B, C, H, W)
         raw_spikes = output.classification_spikes.clone()
+
+        # Store pooling indices for HULK decoder
+        pooling_indices = output.pooling_indices if return_pooling_indices else None
 
         # Get classification spikes: (T, B, C, H, W) -> sum over time
         class_spikes = output.classification_spikes.sum(dim=0)  # (B, C, H, W)
@@ -314,9 +320,126 @@ def detect_satellites(
                     confidence=float(confidence)
                 ))
 
+        if return_pooling_indices:
+            return all_boxes, raw_spikes, pooling_indices
         if return_spikes:
             return all_boxes, raw_spikes
         return all_boxes
+
+
+def run_hulk_smash_tracking(
+    model: SpikeSEGEncoder,
+    events: torch.Tensor,
+    device: torch.device,
+    previous_objects: Optional[list] = None,
+    smash_threshold: float = 0.0,
+):
+    """
+    Run HULK/SMASH instance segmentation and tracking.
+
+    This implements the full pipeline from the Kirkland et al. 2022 paper:
+    1. HULK: Decode each classification spike back to pixel space
+    2. ASH: Create Active Spike Hash for each instance
+    3. SMASH: Group instances into objects using SMASH scores
+    4. Track: Match objects across sequences
+
+    Args:
+        model: Loaded SpikeSEG encoder
+        events: Input tensor (T, C, H, W) or (T, B, C, H, W)
+        device: Compute device
+        previous_objects: Objects from previous sequence for tracking (optional)
+        smash_threshold: Minimum SMASH score to group instances (default: 0.0)
+
+    Returns:
+        Dict with:
+            - 'objects': List of Object instances detected
+            - 'instances': List of Instance instances (before grouping)
+            - 'matches': Dict mapping current object IDs to previous object IDs
+            - 'n_spikes': Total number of classification spikes processed
+    """
+    from spikeseg.algorithms.hulk import HULKDecoder
+    from spikeseg.algorithms.smash import group_instances_to_objects, match_objects_across_sequences
+
+    model.eval()
+
+    with torch.no_grad():
+        # Ensure correct shape: (T, B, C, H, W)
+        if events.dim() == 4:
+            events = events.unsqueeze(1)
+        elif events.dim() == 5 and events.shape[0] != events.shape[1]:
+            events = events.permute(1, 0, 2, 3, 4)
+
+        events = events.to(device)
+        T = events.shape[0]
+
+        # Forward pass
+        output = model(events)
+
+        # Get classification spikes and pooling indices
+        class_spikes = output.classification_spikes  # (T, B, C, H, W)
+        pool_indices = output.pooling_indices
+
+        # Create HULK decoder from encoder weights
+        hulk = HULKDecoder.from_encoder(model)
+
+        # Process batch item 0 (single sample)
+        # Reshape class_spikes: (T, B, C, H, W) -> (T, C, H, W) for batch 0
+        class_spikes_b0 = class_spikes[:, 0, :, :, :]  # (T, C, H, W)
+
+        # Count total spikes
+        n_spikes = int(class_spikes_b0.sum().item())
+
+        if n_spikes == 0:
+            return {
+                'objects': [],
+                'instances': [],
+                'matches': {},
+                'n_spikes': 0
+            }
+
+        # Get pooling indices for batch 0
+        pool1_idx = pool_indices.pool1_indices
+        pool2_idx = pool_indices.pool2_indices
+        pool1_size = pool_indices.pool1_output_size
+        pool2_size = pool_indices.pool2_output_size
+
+        # Use HULK to process all classification spikes into instances
+        try:
+            instances = hulk.process_to_instances(
+                classification_spikes=class_spikes_b0,
+                pool1_indices=pool1_idx,
+                pool2_indices=pool2_idx,
+                pool1_output_size=pool1_size,
+                pool2_output_size=pool2_size,
+                n_timesteps=T,
+                threshold=0.5
+            )
+        except Exception as e:
+            print(f"HULK processing failed: {e}")
+            return {
+                'objects': [],
+                'instances': [],
+                'matches': {},
+                'n_spikes': n_spikes,
+                'error': str(e)
+            }
+
+        # Group instances into objects using SMASH
+        objects = group_instances_to_objects(instances, smash_threshold=smash_threshold)
+
+        # Match with previous objects if provided
+        matches = {}
+        if previous_objects:
+            matches = match_objects_across_sequences(
+                objects, previous_objects, similarity_threshold=0.1
+            )
+
+        return {
+            'objects': objects,
+            'instances': instances,
+            'matches': matches,
+            'n_spikes': n_spikes
+        }
 
 
 def visualize_detections(
@@ -1397,6 +1520,7 @@ def main():
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
     parser.add_argument('--trajectory-video', action='store_true', help='Save HONEST trajectory video showing detection ONLY at spike frames')
+    parser.add_argument('--hulk-tracking', action='store_true', help='Use HULK/SMASH for instance segmentation and tracking')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -1572,6 +1696,33 @@ def main():
                     output_path=f'trajectory_sample_{i:03d}.gif',
                     fps=args.animation_fps,
                 )
+
+            if args.hulk_tracking and i < 10:  # HULK/SMASH instance segmentation
+                print(f"\nSample {i}: Running HULK/SMASH tracking...")
+                hulk_result = run_hulk_smash_tracking(model, x, device)
+
+                print(f"  Classification spikes: {hulk_result['n_spikes']}")
+                print(f"  Instances found: {len(hulk_result['instances'])}")
+                print(f"  Objects after grouping: {len(hulk_result['objects'])}")
+
+                if hulk_result['objects']:
+                    for obj in hulk_result['objects']:
+                        print(f"    Object {obj.object_id}: {obj.n_instances} instances, bbox={obj.combined_bbox}")
+
+                # Add to results
+                result['hulk'] = {
+                    'n_spikes': hulk_result['n_spikes'],
+                    'n_instances': len(hulk_result['instances']),
+                    'n_objects': len(hulk_result['objects']),
+                    'objects': [
+                        {
+                            'id': obj.object_id,
+                            'n_instances': obj.n_instances,
+                            'bbox': obj.combined_bbox.to_xyxy() if obj.combined_bbox else None
+                        }
+                        for obj in hulk_result['objects']
+                    ]
+                }
 
             if (i + 1) % 10 == 0:
                 print(f"Processed {i + 1}/{len(dataset)}")
