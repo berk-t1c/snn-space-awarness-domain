@@ -1,60 +1,90 @@
-"""Quick test to compare spike counts with/without inference mode"""
+#!/usr/bin/env python3
+"""Simple test: does fire_once=False produce more spikes?"""
 import sys
-sys.path.insert(0, '/home/user/snn-space-awarness-domain')
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
-from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig
-from spikeseg.data.ebssa import EBSSADataset
+from spikeseg.data.datasets import EBSSADataset
+from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig, LayerConfig
 
-# Load model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
-checkpoint = torch.load('/home/user/checkpoint_best.pt', map_location=device, weights_only=False)
-config = EncoderConfig.from_paper("igarss2023", n_classes=2)
-model = SpikeSEGEncoder(config).to(device)
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
+# Load checkpoint - try multiple paths
+for ckpt_path in [
+    os.path.expanduser('~/checkpoint_best.pt'),
+    './checkpoint_best.pt',
+    '../checkpoint_best.pt',
+]:
+    if os.path.exists(ckpt_path):
+        break
+else:
+    print("ERROR: checkpoint_best.pt not found")
+    sys.exit(1)
 
-# Load one sample
-dataset = EBSSADataset(
-    root_dir='/home/user/ebssa-data',
-    n_time_bins=10,
-    height=128, width=128,
-    normalize=True, use_labels=True,
-    windows_per_recording=1, split='all'
+print(f"Checkpoint: {ckpt_path}")
+ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+cfg = ckpt.get('config', {})
+m = cfg.get('model', {})
+
+# Build model
+enc_config = EncoderConfig(
+    input_channels=cfg.get('data', {}).get('input_channels', 2),
+    conv1=LayerConfig(out_channels=m.get('conv1_channels', 4), kernel_size=5, threshold=0.05, leak=0.045),
+    conv2=LayerConfig(out_channels=m.get('conv2_channels', 36), kernel_size=5, threshold=0.05, leak=0.005),
+    conv3=LayerConfig(out_channels=m.get('n_classes', 1), kernel_size=7, threshold=0.05, leak=0.0),
 )
-x, label = dataset[0]
-x = x.unsqueeze(1).to(device)  # (T, 1, C, H, W)
+model = SpikeSEGEncoder(enc_config).to(device)
 
-print(f"\nInput shape: {x.shape}")
-print(f"Timesteps: {x.shape[0]}")
+# Load weights
+sd = {k.replace('encoder.', ''): v for k, v in ckpt['model_state_dict'].items()}
+model.load_state_dict({k: v for k, v in sd.items() if k in model.state_dict()}, strict=False)
+model.eval()
+print("Model loaded")
 
-# Test WITH fire-once (default)
-print("\n=== WITH fire_once=True (default) ===")
+# Load one sample - try multiple data paths
+for data_path in [
+    os.path.expanduser('~/ebssa-data'),
+    os.path.expanduser('~/ebssa-data-utah/ebssa'),
+    '../ebssa-data',
+    './data/EBSSA',
+]:
+    if os.path.exists(data_path):
+        break
+else:
+    print("ERROR: EBSSA data not found")
+    sys.exit(1)
+
+print(f"Data: {data_path}")
+ds = EBSSADataset(root=data_path, n_timesteps=20, height=128, width=128, split='all')
+x, _ = ds[0]
+x = x.unsqueeze(1).to(device)
+print(f"Input: {x.shape}")
+
+# Test 1: fire_once=True
+print("\n=== fire_once=True ===")
+model.reset_state()
 with torch.no_grad():
-    output1 = model(x, fire_once=True)
-    spikes1 = output1.classification_spikes  # (T, B, C, H, W)
-    
-    total_spikes1 = spikes1.sum().item()
-    spikes_per_t1 = [spikes1[t].sum().item() for t in range(spikes1.shape[0])]
-    
-    print(f"Total classification spikes: {total_spikes1}")
-    print(f"Spikes per timestep: {spikes_per_t1}")
+    out1 = model(x, fire_once=True)
+s1 = out1.classification_spikes
+per_t1 = [s1[t].sum().item() for t in range(s1.shape[0])]
+print(f"Spikes per timestep: {per_t1}")
+print(f"TOTAL: {sum(per_t1):.0f}")
 
-# Test WITHOUT fire-once (inference mode)
-print("\n=== WITH fire_once=False (inference mode) ===")
+# Test 2: fire_once=False
+print("\n=== fire_once=False ===")
+model.reset_state()
 with torch.no_grad():
-    output2 = model(x, fire_once=False)
-    spikes2 = output2.classification_spikes  # (T, B, C, H, W)
-    
-    total_spikes2 = spikes2.sum().item()
-    spikes_per_t2 = [spikes2[t].sum().item() for t in range(spikes2.shape[0])]
-    
-    print(f"Total classification spikes: {total_spikes2}")
-    print(f"Spikes per timestep: {spikes_per_t2}")
+    out2 = model(x, fire_once=False)
+s2 = out2.classification_spikes
+per_t2 = [s2[t].sum().item() for t in range(s2.shape[0])]
+print(f"Spikes per timestep: {per_t2}")
+print(f"TOTAL: {sum(per_t2):.0f}")
 
-print(f"\n=== COMPARISON ===")
-print(f"fire_once=True:  {total_spikes1} total spikes")
-print(f"fire_once=False: {total_spikes2} total spikes")
-print(f"Increase: {total_spikes2 - total_spikes1} more spikes ({(total_spikes2/max(total_spikes1,1)-1)*100:.1f}% increase)")
+# Result
+print("\n" + "="*50)
+if sum(per_t2) > sum(per_t1):
+    print(f"SUCCESS: {sum(per_t2):.0f} > {sum(per_t1):.0f} spikes")
+else:
+    print(f"SAME: {sum(per_t2):.0f} vs {sum(per_t1):.0f}")
