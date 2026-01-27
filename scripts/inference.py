@@ -252,8 +252,9 @@ def detect_satellites(
         # Ensure correct shape: (T, B, C, H, W)
         if events.dim() == 4:
             events = events.unsqueeze(1)  # Add batch dim -> (T, 1, C, H, W)
-        elif events.dim() == 5 and events.shape[0] != events.shape[1]:
-            # Likely (B, T, C, H, W), convert to (T, B, C, H, W)
+        elif events.dim() == 5 and events.shape[0] < events.shape[1]:
+            # Input is (B, T, C, H, W) where B < T, convert to (T, B, C, H, W)
+            # Note: Only permute when first dim < second dim (batch typically smaller than timesteps)
             events = events.permute(1, 0, 2, 3, 4)
 
         events = events.to(device)
@@ -373,7 +374,8 @@ def run_hulk_smash_tracking(
         # Ensure correct shape: (T, B, C, H, W)
         if events.dim() == 4:
             events = events.unsqueeze(1)
-        elif events.dim() == 5 and events.shape[0] != events.shape[1]:
+        elif events.dim() == 5 and events.shape[0] < events.shape[1]:
+            # Input is (B, T, C, H, W) where B < T, convert to (T, B, C, H, W)
             events = events.permute(1, 0, 2, 3, 4)
 
         events = events.to(device)
