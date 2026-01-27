@@ -520,6 +520,40 @@ def create_tracking_video(
         frame_idx = max(0, min(T - 1, frame_idx))
         detections_per_frame[frame_idx].append((cx, cy))
 
+    # Per-frame evaluation: check if detection is within tolerance of GT
+    hit_tolerance = 30  # pixels - detection counts as HIT if within this distance of GT
+    frame_eval = {}  # frame -> {'hit': bool, 'dist': float or None, 'num_det': int}
+    total_hits = 0
+    total_frames_with_gt = 0
+
+    for t in range(T):
+        frame_dets = detections_per_frame.get(t, [])
+        has_gt = t in avg_traj_per_frame
+
+        if has_gt:
+            total_frames_with_gt += 1
+            gt_cx, gt_cy = avg_traj_per_frame[t]
+
+            if frame_dets:
+                # Find closest detection to GT
+                min_dist = float('inf')
+                for det_cx, det_cy in frame_dets:
+                    dist = np.sqrt((det_cx - gt_cx)**2 + (det_cy - gt_cy)**2)
+                    min_dist = min(min_dist, dist)
+
+                is_hit = min_dist <= hit_tolerance
+                if is_hit:
+                    total_hits += 1
+                frame_eval[t] = {'hit': is_hit, 'dist': min_dist, 'num_det': len(frame_dets)}
+            else:
+                frame_eval[t] = {'hit': False, 'dist': None, 'num_det': 0}
+        else:
+            frame_eval[t] = {'hit': None, 'dist': None, 'num_det': len(frame_dets)}  # No GT to compare
+
+    # Print per-frame stats
+    detection_rate = (total_hits / total_frames_with_gt * 100) if total_frames_with_gt > 0 else 0
+    print(f"  Per-frame stats: {total_hits}/{total_frames_with_gt} frames with hits ({detection_rate:.1f}%)")
+
     # Create custom colormap: black -> blue -> white (for event intensity)
     colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
     event_cmap = LinearSegmentedColormap.from_list('events', colors)
@@ -558,35 +592,61 @@ def create_tracking_video(
             # Draw cyan crosshair
             ax.plot(cx, cy, 'c+', markersize=12, markeredgewidth=2)
 
-        # Draw ACTUAL network detections (red/orange boxes) - real model output
-        frame_detections = detections_per_frame.get(frame, [])
-        num_detections = len(frame_detections)
-        for cx, cy in frame_detections:
+        # Draw ACTUAL network detections (colored by hit/miss)
+        frame_dets = detections_per_frame.get(frame, [])
+        eval_info = frame_eval.get(frame, {})
+        is_hit = eval_info.get('hit', None)
+        min_dist = eval_info.get('dist', None)
+
+        for det_cx, det_cy in frame_dets:
             box_size = 25
+            # Green if HIT, Red if MISS, Orange if no GT to compare
+            if is_hit is True:
+                color = 'lime'
+            elif is_hit is False:
+                color = 'red'
+            else:
+                color = 'orange'
+
             det_rect = patches.Rectangle(
-                (cx - box_size/2, cy - box_size/2), box_size, box_size,
-                linewidth=3, edgecolor='red', facecolor='none',
+                (det_cx - box_size/2, det_cy - box_size/2), box_size, box_size,
+                linewidth=3, edgecolor=color, facecolor='none',
                 label='SNN Detection'
             )
             ax.add_patch(det_rect)
-            ax.plot(cx, cy, 'r+', markersize=15, markeredgewidth=3)
+            ax.plot(det_cx, det_cy, '+', color=color, markersize=15, markeredgewidth=3)
 
-        # Draw GT trajectory trail (cyan only - no fake "tracking" coloring)
+        # Draw trajectory trail (cyan for GT path)
         trail_frames = range(max(0, frame-5), frame+1)
         for tf in trail_frames[:-1]:  # Don't include current frame
             if tf in avg_traj_per_frame and tf+1 in avg_traj_per_frame:
                 x1, y1 = avg_traj_per_frame[tf]
                 x2, y2 = avg_traj_per_frame[tf+1]
-                ax.plot([x1, x2], [y1, y2], color='cyan', linewidth=2, alpha=0.7)
+                # Color trail by hit status
+                tf_hit = frame_eval.get(tf, {}).get('hit', None)
+                color = 'lime' if tf_hit else 'cyan'
+                ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.7)
 
         ax.set_xlim(0, W)
         ax.set_ylim(H, 0)
 
-        # Title with HONEST info
+        # Title with per-frame evaluation info
         has_gt = frame in avg_traj_per_frame
-        title = f'Frame {frame+1}/{T} | '
-        title += f'SNN Detections: {num_detections} | GT: {"visible" if has_gt else "none"}'
-        ax.set_title(title, fontsize=12, color='white', pad=10)
+        num_dets = len(frame_dets)
+
+        title = f'Frame {frame+1}/{T} | Detections: {num_dets} | '
+        if has_gt:
+            if is_hit:
+                title += f'HIT (dist={min_dist:.1f}px)'
+            elif num_dets > 0:
+                title += f'MISS (dist={min_dist:.1f}px)'
+            else:
+                title += 'NO DETECTION'
+        else:
+            title += 'No GT'
+
+        title += f' | Rate: {total_hits}/{total_frames_with_gt}'
+        ax.set_title(title, fontsize=11, color='white', pad=10)
         ax.axis('off')
 
         return []
@@ -1125,7 +1185,6 @@ def main():
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
-    parser.add_argument('--max-vis', type=int, default=10, help='Max samples to visualize (default: 10, use -1 for all)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--split', default='all', choices=['train', 'val', 'test', 'all'],
                         help='Dataset split to use (default: all)')
@@ -1171,7 +1230,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and (args.max_vis < 0 or i < args.max_vis)
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and i < 10
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1189,13 +1248,13 @@ def main():
             }
             results.append(result)
 
-            if args.visualize and (args.max_vis < 0 or i < args.max_vis):  # 2D visualization
+            if args.visualize and i < 10:  # 2D visualization
                 visualize_detections(
                     x, boxes, label,
                     output_path=f'detection_{i:03d}.png'
                 )
 
-            if args.visualize_3d and (args.max_vis < 0 or i < args.max_vis):  # 3D paper-style visualization
+            if args.visualize_3d and i < 10:  # 3D paper-style visualization
                 # Try to get actual trajectory from dataset
                 trajectory = None
                 try:
@@ -1220,7 +1279,7 @@ def main():
                     title=f'Sample {i}: Satellite Trajectory'
                 )
 
-            if args.animate_3d and (args.max_vis < 0 or i < args.max_vis):  # Animated 3D visualization
+            if args.animate_3d and i < 10:  # Animated 3D visualization
                 # Load trajectory if not already loaded
                 if trajectory is None:
                     try:
@@ -1247,7 +1306,7 @@ def main():
                     trail_length=args.animation_trail,
                 )
 
-            if args.tracking_video and (args.max_vis < 0 or i < args.max_vis):  # 2D tracking video with bounding boxes
+            if args.tracking_video and i < 10:  # 2D tracking video with bounding boxes
                 # Load trajectory if not already loaded
                 if trajectory is None:
                     try:
