@@ -190,15 +190,27 @@ class SyntheticDataGenerator:
                         frame[0, py, px] = max(frame[0, py, px].item(), intensity * 0.3)
                         frame[1, py, px] = max(frame[1, py, px].item(), intensity * 1.0)
         
-        # Then add noise ON TOP (can corrupt signal)
+        # Then add noise (realistic model: additive noise that can partially obscure signal)
         if noise_level > 0:
-            noise_mask = torch.rand(self.H, self.W) < noise_level
-            # Noise with signal-comparable intensity (0.5-1.0 range)
-            noise_intensity = torch.rand(self.H, self.W) * 0.5 + 0.5
+            # Number of noise events proportional to noise_level
+            # At 100% noise, we have as many noise pixels as image pixels
+            n_noise_pixels = int(noise_level * self.H * self.W)
             
-            # Apply noise - overwrites signal where mask is True
-            frame[0] = torch.where(noise_mask, noise_intensity * 0.3, frame[0])
-            frame[1] = torch.where(noise_mask, noise_intensity * 1.0, frame[1])
+            if n_noise_pixels > 0:
+                # Random positions for noise
+                noise_y = torch.randint(0, self.H, (n_noise_pixels,))
+                noise_x = torch.randint(0, self.W, (n_noise_pixels,))
+                
+                # Noise intensity varies: some weak, some strong
+                # Scale intensity with noise level (higher noise = stronger noise events)
+                base_intensity = 0.3 + 0.5 * noise_level  # 0.3 at low noise, 0.8 at high noise
+                noise_vals = torch.rand(n_noise_pixels) * base_intensity
+                
+                # Add noise (additive, can stack)
+                for i in range(n_noise_pixels):
+                    y, x = noise_y[i].item(), noise_x[i].item()
+                    frame[0, y, x] = min(1.0, frame[0, y, x] + noise_vals[i] * 0.3)
+                    frame[1, y, x] = min(1.0, frame[1, y, x] + noise_vals[i] * 1.0)
         
         return frame
     
