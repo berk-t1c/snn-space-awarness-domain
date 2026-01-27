@@ -836,10 +836,12 @@ class EventDataset(Dataset, ABC):
             voxel_grid: (T, C, H, W) tensor.
         """
         # Try to load sample, with fallback to next valid sample
-        max_attempts = min(10, len(self.recordings))
+        # Use len(self) instead of len(self.recordings) for subclass compatibility
+        dataset_len = len(self)
+        max_attempts = min(10, dataset_len)
         for attempt in range(max_attempts):
             try:
-                actual_index = (index + attempt) % len(self.recordings)
+                actual_index = (index + attempt) % dataset_len
                 events, label = self._load_sample(actual_index)
                 
                 # Skip empty events
@@ -1581,7 +1583,8 @@ class EBSSADataset(EventDataset):
 
                         if len(obj_ts_flat) > 0:
                             # Filter to positions within time window
-                            time_mask = (obj_ts_flat >= t_min) & (obj_ts_flat <= t_max)
+                            # Use < for t_max to match event filtering (half-open interval)
+                            time_mask = (obj_ts_flat >= t_min) & (obj_ts_flat < t_max)
                             if np.any(time_mask):
                                 pos_x = obj_x[time_mask]
                                 pos_y = obj_y[time_mask]

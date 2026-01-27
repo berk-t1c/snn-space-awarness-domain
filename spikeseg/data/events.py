@@ -797,7 +797,13 @@ class EventBuffer:
     ):
         """Add events to appropriate time bins."""
         # Normalize time to [0, n_bins)
-        t_norm = (t - t_start) / (t_end - t_start) * self.n_bins
+        # Guard against division by zero when all events have same timestamp
+        duration = t_end - t_start
+        if duration > 0:
+            t_norm = (t - t_start) / duration * self.n_bins
+        else:
+            # All events at same time - put in middle bin
+            t_norm = np.full_like(t, self.n_bins // 2, dtype=np.float64)
         bin_idx = np.clip(t_norm.astype(int), 0, self.n_bins - 1)
         
         for b in range(self.n_bins):

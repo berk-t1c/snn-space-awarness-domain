@@ -375,15 +375,25 @@ class ActiveSpikeHash:
         
         hash_matrix = torch.zeros(n_features, n_timesteps, device=device)
         
+        out_of_range_count = 0
         for feature_id, spikes in spike_times.items():
             if not 0 <= feature_id < n_features:
                 raise ValueError(
                     f"feature_id {feature_id} out of range [0, {n_features})"
                 )
-            
+
             for x, y, t in spikes:
                 if 0 <= t < n_timesteps:
                     hash_matrix[feature_id, t] = 1.0
+                else:
+                    out_of_range_count += 1
+
+        if out_of_range_count > 0:
+            import warnings
+            warnings.warn(
+                f"ASH: {out_of_range_count} spikes had timestep outside [0, {n_timesteps}), "
+                f"these were excluded from the hash matrix."
+            )
         
         return cls(hash_matrix, n_features, n_timesteps)
     
