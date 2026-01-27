@@ -21,6 +21,8 @@ import torch.nn.functional as F
 from scipy import ndimage
 
 from spikeseg.models.encoder import SpikeSEGEncoder, EncoderConfig, LayerConfig
+from spikeseg.algorithms.hulk import HULKDecoder
+from spikeseg.algorithms.smash import group_instances_to_objects
 
 
 @dataclass
@@ -662,6 +664,210 @@ def create_tracking_video(
     return anim
 
 
+def create_honest_tracking_video(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    trajectory: Optional[dict] = None,
+    output_path: str = "honest_tracking.gif",
+    fps: int = 5,
+):
+    """
+    HONEST tracking visualization - clearly distinguishes detected vs interpolated.
+
+    - SOLID GREEN box + "DETECTED": Real network detection at this frame
+    - DASHED YELLOW box + "INTERPOLATED": Estimated position between detections
+    - No box: No detection and can't interpolate
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        trajectory: Optional GT trajectory dict with 'x', 'y', 't'
+        output_path: Where to save the GIF
+        fps: Animation speed
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.colors import LinearSegmentedColormap
+
+    # Process events
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]
+
+    if events_np.ndim == 4 and events_np.shape[1] >= 2:
+        combined = events_np[:, 0, :, :] + events_np[:, 1, :, :]
+    else:
+        combined = events_np.sum(axis=1) if events_np.ndim == 4 else events_np
+
+    T, H, W = combined.shape
+
+    # Process predictions
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+    scale_y = H / H_pred
+    scale_x = W / W_pred
+
+    # Extract REAL detections per frame (no fabrication)
+    real_detections = {}  # frame -> (cx, cy) only where network actually detected
+
+    for t in range(T_pred):
+        spike_map = pred_np[t]
+        if spike_map.sum() > 0:
+            # Get centroid of all spikes at this timestep
+            ys, xs = np.where(spike_map > 0)
+            cx = xs.mean() * scale_x
+            cy = ys.mean() * scale_y
+            # Map prediction frame to input frame
+            input_frame = int(round(t * T / T_pred)) if T_pred > 0 else t
+            input_frame = max(0, min(T - 1, input_frame))
+            real_detections[input_frame] = (cx, cy)
+
+    # Compute interpolated positions (clearly marked as estimates)
+    interpolated = {}  # frame -> (cx, cy) for frames without detection
+
+    detected_frames = sorted(real_detections.keys())
+    num_detected = len(detected_frames)
+
+    if num_detected >= 2:
+        # Interpolate between detected frames
+        for i in range(len(detected_frames) - 1):
+            f1, f2 = detected_frames[i], detected_frames[i + 1]
+            x1, y1 = real_detections[f1]
+            x2, y2 = real_detections[f2]
+
+            for f in range(f1 + 1, f2):
+                alpha = (f - f1) / (f2 - f1)
+                cx = x1 + alpha * (x2 - x1)
+                cy = y1 + alpha * (y2 - y1)
+                interpolated[f] = (cx, cy)
+
+    # Stats
+    detection_rate = num_detected / T * 100 if T > 0 else 0
+    print(f"  HONEST STATS: {num_detected}/{T} frames with real detections ({detection_rate:.1f}%)")
+    print(f"  Detected frames: {detected_frames}")
+
+    # Create colormap
+    colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
+    event_cmap = LinearSegmentedColormap.from_list('events', colors)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
+
+    def update(frame):
+        ax.clear()
+        ax.set_facecolor('black')
+
+        # Accumulate events
+        window = 5
+        start = max(0, frame - window + 1)
+        accumulated = np.sum(combined[start:frame+1], axis=0)
+        if accumulated.max() > 0:
+            accumulated = accumulated / accumulated.max()
+
+        ax.imshow(accumulated, cmap=event_cmap, vmin=0, vmax=1, interpolation='nearest')
+
+        # Determine what to show for this frame
+        is_detected = frame in real_detections
+        is_interpolated = frame in interpolated
+
+        box_size = 25
+
+        if is_detected:
+            # REAL DETECTION - solid green box
+            cx, cy = real_detections[frame]
+            rect = patches.Rectangle(
+                (cx - box_size/2, cy - box_size/2), box_size, box_size,
+                linewidth=3, edgecolor='lime', facecolor='none',
+                linestyle='-'  # SOLID = real detection
+            )
+            ax.add_patch(rect)
+            ax.plot(cx, cy, 'g+', markersize=15, markeredgewidth=3)
+            status = "DETECTED"
+            status_color = 'lime'
+
+        elif is_interpolated:
+            # INTERPOLATED - dashed yellow box
+            cx, cy = interpolated[frame]
+            rect = patches.Rectangle(
+                (cx - box_size/2, cy - box_size/2), box_size, box_size,
+                linewidth=2, edgecolor='yellow', facecolor='none',
+                linestyle='--'  # DASHED = interpolated
+            )
+            ax.add_patch(rect)
+            ax.plot(cx, cy, 'y+', markersize=12, markeredgewidth=2)
+            status = "INTERPOLATED"
+            status_color = 'yellow'
+
+        else:
+            # NO DATA - nothing to show
+            status = "NO DETECTION"
+            status_color = 'red'
+
+        # Draw trajectory trail showing detected vs interpolated
+        trail_len = 10
+        for tf in range(max(0, frame - trail_len), frame):
+            if tf in real_detections:
+                cx1, cy1 = real_detections[tf]
+                color = 'lime'
+                alpha = 0.8
+            elif tf in interpolated:
+                cx1, cy1 = interpolated[tf]
+                color = 'yellow'
+                alpha = 0.4
+            else:
+                continue
+
+            # Find next point
+            next_f = tf + 1
+            if next_f in real_detections:
+                cx2, cy2 = real_detections[next_f]
+            elif next_f in interpolated:
+                cx2, cy2 = interpolated[next_f]
+            else:
+                continue
+
+            ax.plot([cx1, cx2], [cy1, cy2], color=color, linewidth=2, alpha=alpha)
+
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+
+        # HONEST title
+        title = f'Frame {frame+1}/{T} | {status} | '
+        title += f'Real detections: {num_detected}/{T} ({detection_rate:.1f}%)'
+        ax.set_title(title, fontsize=11, color=status_color, pad=10)
+        ax.axis('off')
+
+        # Add legend
+        legend_elements = [
+            patches.Patch(facecolor='none', edgecolor='lime', linewidth=2,
+                         linestyle='-', label='DETECTED (real)'),
+            patches.Patch(facecolor='none', edgecolor='yellow', linewidth=2,
+                         linestyle='--', label='INTERPOLATED (estimated)'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right',
+                 facecolor='black', edgecolor='white', labelcolor='white',
+                 fontsize=9)
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=T, interval=1000//fps, blit=False)
+
+    print(f"Saving HONEST tracking video to {output_path}...")
+    writer = PillowWriter(fps=fps)
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black', 'edgecolor': 'none'})
+    print(f"Honest tracking video saved: {output_path}")
+
+    plt.close()
+    return anim
+
+
 def visualize_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
@@ -1183,6 +1389,7 @@ def main():
     parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
+    parser.add_argument('--honest-tracking', action='store_true', help='Save HONEST tracking video (solid=detected, dashed=interpolated)')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--max-vis', type=int, default=10, help='Max samples to visualize (default: 10, use -1 for all)')
@@ -1231,7 +1438,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and (args.max_vis < 0 or i < args.max_vis)
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.honest_tracking) and (args.max_vis < 0 or i < args.max_vis)
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1330,6 +1537,15 @@ def main():
                     trajectory=trajectory,
                     label=label,
                     output_path=f'tracking_sample_{i:03d}.gif',
+                    fps=args.animation_fps,
+                )
+
+            if args.honest_tracking and (args.max_vis < 0 or i < args.max_vis):
+                # HONEST tracking video - clearly shows detected vs interpolated
+                create_honest_tracking_video(
+                    x, raw_spikes,
+                    trajectory=trajectory,
+                    output_path=f'honest_tracking_{i:03d}.gif',
                     fps=args.animation_fps,
                 )
 
