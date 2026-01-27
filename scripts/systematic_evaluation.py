@@ -251,7 +251,14 @@ class EvaluationEngine:
         self.generator = SyntheticDataGenerator(config)
         
     def detect_objects(self, spike_map: np.ndarray, scale: float, min_size: int = 2) -> List[Tuple[float, float]]:
-        """Detect multiple objects using connected components."""
+        """Detect multiple objects using connected components.
+        
+        Applies receptive field offset correction (16, 20) to map spike coordinates
+        back to image coordinates accurately.
+        """
+        # Receptive field offset - determined empirically
+        OFFSET_X, OFFSET_Y = 16, 20
+        
         binary = (spike_map > 0).astype(int)
         labeled, num_features = scipy_label(binary)
         
@@ -259,8 +266,9 @@ class EvaluationEngine:
         for obj_id in range(1, num_features + 1):
             coords = np.where(labeled == obj_id)
             if len(coords[0]) >= min_size:
-                det_y = coords[0].mean() * scale
-                det_x = coords[1].mean() * scale
+                # Apply scale and offset correction
+                det_y = coords[0].mean() * scale + OFFSET_Y
+                det_x = coords[1].mean() * scale + OFFSET_X
                 detections.append((det_x, det_y))
         
         return detections
