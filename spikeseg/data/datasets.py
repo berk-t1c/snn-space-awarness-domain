@@ -707,9 +707,14 @@ class EventAugmentation:
         if self.flip_vertical and np.random.rand() > 0.5:
             y = h - 1 - y
         
-        # Polarity flip
+        # Polarity flip - handle both 0/1 and -1/+1 conventions
         if self.flip_polarity and np.random.rand() > 0.5:
-            p = 1 - p  # Assumes polarity is 0/1
+            if p.min() < 0:
+                # -1/+1 convention: flip by negating
+                p = -p
+            else:
+                # 0/1 convention: flip by inverting
+                p = 1 - p
         
         # Random crop
         if self.random_crop is not None:

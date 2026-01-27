@@ -420,8 +420,12 @@ class EncoderConfig:
             conv1=self.conv1,
             conv2=self.conv2,
             conv3=new_conv3,
-            pool_kernel_size=self.pool_kernel_size,
-            pool_stride=self.pool_stride,
+            pool1_kernel_size=self.pool1_kernel_size,
+            pool1_stride=self.pool1_stride,
+            pool2_kernel_size=self.pool2_kernel_size,
+            pool2_stride=self.pool2_stride,
+            pool_kernel_size=self.pool_kernel_size,  # Legacy
+            pool_stride=self.pool_stride,  # Legacy
             use_wta=self.use_wta,
             wta_mode=self.wta_mode,
             store_all_spikes=self.store_all_spikes,
