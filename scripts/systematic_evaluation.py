@@ -71,24 +71,11 @@ class SyntheticDataGenerator:
         self.C = config.C
         self.T = config.T
         
-        # Hot pixel map (some pixels always fire - realistic sensor defect)
-        self.hot_pixel_rate = 0.001  # 0.1% of pixels are "hot"
+        # Hot pixels: ~0.05% of pixels (about 8 on 128x128)
+        self.hot_pixel_rate = 0.0005
         self.hot_pixels = torch.rand(self.H, self.W) < self.hot_pixel_rate
-        
-        # Spatial noise non-uniformity (some regions noisier - like sensor edges)
-        self.noise_bias = self._create_noise_bias_map()
-        
-    def _create_noise_bias_map(self) -> torch.Tensor:
-        """Create spatial noise bias - edges and corners are noisier."""
-        y_coords = torch.linspace(0, 1, self.H).unsqueeze(1).expand(self.H, self.W)
-        x_coords = torch.linspace(0, 1, self.W).unsqueeze(0).expand(self.H, self.W)
-        
-        # Distance from center (normalized)
-        dist_from_center = torch.sqrt((x_coords - 0.5)**2 + (y_coords - 0.5)**2) / 0.707
-        
-        # Edges are 1.5x noisier, center is baseline
-        noise_bias = 1.0 + 0.5 * dist_from_center
-        return noise_bias
+        # Hot pixel intensity: ~0.15 (150/1000 scale, much weaker than signal)
+        self.hot_pixel_intensity = 0.15
         
     def generate_trajectory(
         self, 
@@ -185,7 +172,7 @@ class SyntheticDataGenerator:
         for obj_idx, (cx, cy) in enumerate(positions):
             icx, icy = int(cx), int(cy)
             
-            # Add tail if previous positions available
+            # Add tail if previous positions available (brighter tail)
             if prev_positions is not None and len(prev_positions[obj_idx]) > 0:
                 for tail_idx in range(1, min(tail_length + 1, t + 1)):
                     if t - tail_idx >= 0 and t - tail_idx < len(prev_positions[obj_idx]):
@@ -196,55 +183,31 @@ class SyntheticDataGenerator:
                             for dx in range(-1, 2):
                                 py, px = itcy + dy, itcx + dx
                                 if 0 <= py < self.H and 0 <= px < self.W:
-                                    frame[0, py, px] = max(frame[0, py, px].item(), fade * 0.15)
-                                    frame[1, py, px] = max(frame[1, py, px].item(), fade * 0.4)
+                                    frame[0, py, px] = max(frame[0, py, px].item(), fade * 0.25)  # Was 0.15
+                                    frame[1, py, px] = max(frame[1, py, px].item(), fade * 0.6)   # Was 0.4
             
-            # Add satellite core
+            # Add satellite core (BRIGHT - high intensity to stand out from noise)
             for dy in range(-3, 4):
                 for dx in range(-3, 4):
                     py, px = icy + dy, icx + dx
                     if 0 <= py < self.H and 0 <= px < self.W:
                         dist = np.sqrt(dx**2 + dy**2)
-                        intensity = max(0, 1.0 - dist * 0.22)
-                        frame[0, py, px] = max(frame[0, py, px].item(), intensity * 0.3)
-                        frame[1, py, px] = max(frame[1, py, px].item(), intensity * 1.0)
+                        intensity = max(0, 1.0 - dist * 0.18)  # Wider bright core
+                        frame[0, py, px] = max(frame[0, py, px].item(), intensity * 0.5)  # Was 0.3
+                        frame[1, py, px] = max(frame[1, py, px].item(), intensity * 1.0)  # Already max
         
-        # Then add noise (realistic event camera noise model)
+        # Add noise
         if noise_level > 0:
-            # 1. HOT PIXELS: Always fire (sensor defects) - weak intensity
-            hot_pixel_intensity = torch.rand(self.H, self.W) * 0.15 + 0.1  # 0.1-0.25 intensity
-            frame[0] = torch.clamp(frame[0] + self.hot_pixels.float() * hot_pixel_intensity * 0.2, 0, 1)
-            frame[1] = torch.clamp(frame[1] + self.hot_pixels.float() * hot_pixel_intensity * 0.5, 0, 1)
+            # 1. Hot pixels (weak, ~8 pixels total)
+            frame[0] = torch.clamp(frame[0] + self.hot_pixels.float() * self.hot_pixel_intensity * 0.3, 0, 1)
+            frame[1] = torch.clamp(frame[1] + self.hot_pixels.float() * self.hot_pixel_intensity * 0.5, 0, 1)
             
-            # 2. BACKGROUND ACTIVITY: Poisson-distributed random events
-            # Rate parameter scales with noise_level and spatial bias
-            poisson_rate = noise_level * self.noise_bias
+            # 2. Random background noise
+            noise_mask = torch.rand(self.H, self.W) < noise_level
+            noise_intensity = torch.rand(self.H, self.W) * (0.2 + 0.3 * noise_level)
             
-            # Sample from Poisson distribution (number of events per pixel)
-            # Use approximation: for small rates, Poisson ~ Bernoulli
-            noise_mask = torch.rand(self.H, self.W) < poisson_rate
-            
-            # 3. SHOT NOISE: Intensity varies (Poisson-like amplitude)
-            # Higher noise = more variation in intensity
-            base_intensity = 0.15 + 0.25 * noise_level  # 0.15 at low, 0.4 at high
-            # Use scaled uniform + small exponential tail for realistic shot noise
-            noise_intensity = torch.rand(self.H, self.W) * base_intensity
-            # Add occasional bright outliers (shot noise spikes) - 5% chance
-            bright_mask = torch.rand(self.H, self.W) < 0.05
-            noise_intensity = torch.where(bright_mask, noise_intensity * 2.0, noise_intensity)
-            noise_intensity = torch.clamp(noise_intensity, 0, 0.8)  # Cap below signal max
-            
-            # 4. TEMPORAL CORRELATION: Some noise pixels are "sticky" (repeat)
-            # This is handled implicitly by hot pixels
-            
-            # Apply background noise
             frame[0] = torch.clamp(frame[0] + noise_mask.float() * noise_intensity * 0.3, 0, 1)
             frame[1] = torch.clamp(frame[1] + noise_mask.float() * noise_intensity * 1.0, 0, 1)
-            
-            # 5. REFRACTORY PERIOD: Pixels that just fired are less likely to fire again
-            # Simulate by slightly suppressing very bright pixels
-            refractory_mask = frame[1] > 0.9
-            frame[1] = torch.where(refractory_mask, frame[1] * 0.95, frame[1])
         
         return frame
     
