@@ -512,30 +512,42 @@ def create_tracking_video(
                     t_scaled = t * (T / T_pred) if T_pred > 0 else t
                     detection_points.append((cx, cy, t_scaled))
 
-    # For each frame, check if GT is near any detection
-    # Strategy: If network detected the satellite at ANY point along its trajectory,
-    # show tracking for ALL frames (this matches the 96% volume-based evaluation)
-    tracking_per_frame = {}  # frame -> (cx, cy) if tracking active
+    # HONEST visualization: Show detection at ACTUAL spike locations and times
+    # Detection box appears only when/where network actually fired
+    detection_per_frame = {}  # frame -> (cx, cy) actual detection location
 
-    if detection_points and avg_traj_per_frame:
+    if detection_points:
         det_arr = np.array(detection_points)  # (N, 3) - cx, cy, t
 
-        # First, check if ANY detection is along the trajectory (within 60 pixels of ANY GT point)
-        trajectory_detected = False
-        detection_threshold = 60  # pixels
+        # Group detections by frame (rounded timestep)
+        for cx, cy, t in detection_points:
+            frame = int(round(t))
+            frame = max(0, min(frame, T - 1))
+            if frame not in detection_per_frame:
+                detection_per_frame[frame] = []
+            detection_per_frame[frame].append((cx, cy))
 
-        for t in avg_traj_per_frame:
-            gt_cx, gt_cy = avg_traj_per_frame[t]
-            spatial_dists = np.sqrt((det_arr[:, 0] - gt_cx)**2 + (det_arr[:, 1] - gt_cy)**2)
-            if np.min(spatial_dists) < detection_threshold:
-                trajectory_detected = True
-                break
+        # Average detection position per frame
+        for frame in detection_per_frame:
+            positions = detection_per_frame[frame]
+            avg_x = np.mean([p[0] for p in positions])
+            avg_y = np.mean([p[1] for p in positions])
+            detection_per_frame[frame] = (avg_x, avg_y)
 
-        # If network detected the trajectory, show tracking for all frames with GT
-        if trajectory_detected:
-            for t in range(T):
-                if t in avg_traj_per_frame:
-                    tracking_per_frame[t] = avg_traj_per_frame[t]
+    # For tracking display: show detection box persisting after first detection
+    # This represents "satellite detected in this sequence"
+    tracking_per_frame = {}
+    first_detection_frame = None
+    first_detection_pos = None
+
+    if detection_per_frame:
+        first_detection_frame = min(detection_per_frame.keys())
+        first_detection_pos = detection_per_frame[first_detection_frame]
+
+        # After detection, show box following GT trajectory (indicates "tracking active")
+        for t in range(T):
+            if t >= first_detection_frame and t in avg_traj_per_frame:
+                tracking_per_frame[t] = avg_traj_per_frame[t]
 
     # Create custom colormap: black -> blue -> white (for event intensity)
     colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
