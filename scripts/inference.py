@@ -865,6 +865,249 @@ def visualize_3d_trajectory(
     return fig
 
 
+def create_trajectory_video(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    trajectory: Optional[dict] = None,
+    label: Optional[torch.Tensor] = None,
+    output_path: str = "trajectory_video.gif",
+    fps: int = 5,
+):
+    """
+    Create HONEST trajectory video showing ONLY actual network detections.
+
+    This visualization shows:
+    - Cyan dashed box: Ground truth satellite position
+    - Green box: Network detection ONLY at frames where spikes actually occurred
+    - Green trajectory line: Connects actual detection positions over time
+    - Shows the network's ability to follow the satellite trajectory through multiple detections
+
+    Unlike tracking video, this does NOT interpolate or fill in missing frames.
+    Detection boxes appear ONLY when/where the network actually fired.
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
+        label: Ground truth mask (H, W)
+        output_path: Path to save video (.gif)
+        fps: Frames per second
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.colors import LinearSegmentedColormap
+
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
+    # Get events per timestep
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]  # (T, C, H, W)
+
+    if events_np.ndim == 4 and events_np.shape[1] >= 2:
+        pos_events = events_np[:, 0, :, :]
+        neg_events = events_np[:, 1, :, :]
+        combined = pos_events + neg_events
+    else:
+        if events_np.ndim == 4:
+            combined = events_np.sum(axis=1)
+        else:
+            combined = events_np
+
+    T, H, W = combined.shape
+
+    # Get predictions
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+    scale_y = H / H_pred
+    scale_x = W / W_pred
+    offset = 12
+
+    # Get GT trajectory positions
+    avg_traj_per_frame = {}
+    if trajectory is not None and trajectory.get('x') is not None:
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
+
+        orig_w, orig_h = 240, 180
+        scale_x_traj = W / orig_w
+        scale_y_traj = H / orig_h
+
+        if len(traj_t) > 0:
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T - 1)
+                traj_per_frame = {t: [] for t in range(T)}
+                for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                    t_bin = int(np.clip(tt, 0, T - 1))
+                    traj_per_frame[t_bin].append((tx * scale_x_traj, ty * scale_y_traj))
+
+                for t in range(T):
+                    if traj_per_frame[t]:
+                        xs = [p[0] for p in traj_per_frame[t]]
+                        ys = [p[1] for p in traj_per_frame[t]]
+                        avg_traj_per_frame[t] = (np.mean(xs), np.mean(ys))
+
+        # Interpolate GT trajectory to fill all frames
+        if avg_traj_per_frame:
+            known_frames = sorted(avg_traj_per_frame.keys())
+            if len(known_frames) >= 2:
+                for t in range(T):
+                    if t not in avg_traj_per_frame:
+                        prev_f = max([f for f in known_frames if f <= t], default=known_frames[0])
+                        next_f = min([f for f in known_frames if f >= t], default=known_frames[-1])
+                        if prev_f == next_f:
+                            avg_traj_per_frame[t] = avg_traj_per_frame[prev_f]
+                        else:
+                            alpha = (t - prev_f) / (next_f - prev_f)
+                            x_interp = avg_traj_per_frame[prev_f][0] + alpha * (avg_traj_per_frame[next_f][0] - avg_traj_per_frame[prev_f][0])
+                            y_interp = avg_traj_per_frame[prev_f][1] + alpha * (avg_traj_per_frame[next_f][1] - avg_traj_per_frame[prev_f][1])
+                            avg_traj_per_frame[t] = (x_interp, y_interp)
+
+    # HONEST detection: Get actual spike locations at each timestep
+    # This is the key difference - we show detection ONLY where spikes occurred
+    detection_per_frame = {}  # frame -> (cx, cy) ONLY if spikes at this frame
+    spike_frames = []  # List of frames with actual spikes
+
+    for t in range(T_pred):
+        spike_map = pred_np[t]
+        if spike_map.sum() > 0:
+            from scipy import ndimage
+            binary_map = (spike_map > 0).astype(np.uint8)
+            labeled, num = ndimage.label(binary_map)
+
+            frame_detections = []
+            for i in range(1, num + 1):
+                coords = np.where(labeled == i)
+                if len(coords[0]) >= 1:
+                    y_min = coords[0].min() * scale_y + offset
+                    y_max = (coords[0].max() + 1) * scale_y + offset
+                    x_min = coords[1].min() * scale_x + offset
+                    x_max = (coords[1].max() + 1) * scale_x + offset
+                    cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+                    frame_detections.append((cx, cy))
+
+            if frame_detections:
+                # Scale timestep to input time range
+                t_scaled = int(round(t * (T / T_pred))) if T_pred > 0 else t
+                t_scaled = max(0, min(t_scaled, T - 1))
+
+                # Average all detections at this frame
+                avg_x = np.mean([d[0] for d in frame_detections])
+                avg_y = np.mean([d[1] for d in frame_detections])
+                detection_per_frame[t_scaled] = (avg_x, avg_y)
+                spike_frames.append(t_scaled)
+
+    print(f"  HONEST detections at frames: {sorted(detection_per_frame.keys())}")
+
+    # Build detection trajectory line (connects detection points)
+    detection_trajectory = []  # List of (x, y, t) for all detections in order
+    for t in sorted(detection_per_frame.keys()):
+        cx, cy = detection_per_frame[t]
+        detection_trajectory.append((cx, cy, t))
+
+    # Create colormap
+    colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
+    event_cmap = LinearSegmentedColormap.from_list('events', colors)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
+
+    def update(frame):
+        ax.clear()
+        ax.set_facecolor('black')
+
+        # Accumulate events
+        window = 5
+        start = max(0, frame - window + 1)
+        accumulated = np.sum(combined[start:frame+1], axis=0)
+
+        if accumulated.max() > 0:
+            accumulated = accumulated / accumulated.max()
+
+        ax.imshow(accumulated, cmap=event_cmap, vmin=0, vmax=1, interpolation='nearest')
+
+        # Draw GT bounding box (cyan dashed)
+        box_size = 20
+        if frame in avg_traj_per_frame:
+            cx, cy = avg_traj_per_frame[frame]
+            gt_rect = patches.Rectangle(
+                (cx - box_size/2, cy - box_size/2), box_size, box_size,
+                linewidth=2, edgecolor='cyan', facecolor='none', linestyle='--',
+                label='Ground Truth'
+            )
+            ax.add_patch(gt_rect)
+            ax.plot(cx, cy, 'c+', markersize=12, markeredgewidth=2)
+
+        # Draw detection trajectory line (green) - connects all past detections
+        past_detections = [(x, y, t) for x, y, t in detection_trajectory if t <= frame]
+        if len(past_detections) >= 2:
+            for i in range(len(past_detections) - 1):
+                x1, y1, t1 = past_detections[i]
+                x2, y2, t2 = past_detections[i + 1]
+                ax.plot([x1, x2], [y1, y2], color='lime', linewidth=2, alpha=0.8)
+
+        # Draw detection points for all past detections (small green dots)
+        for x, y, t in past_detections:
+            ax.plot(x, y, 'go', markersize=6, alpha=0.6)
+
+        # Draw ACTUAL detection box ONLY if this frame has a spike
+        has_detection = frame in detection_per_frame
+        if has_detection:
+            cx, cy = detection_per_frame[frame]
+            det_box_size = 25
+            det_rect = patches.Rectangle(
+                (cx - det_box_size/2, cy - det_box_size/2), det_box_size, det_box_size,
+                linewidth=3, edgecolor='lime', facecolor='none',
+                label='SNN Detection'
+            )
+            ax.add_patch(det_rect)
+            ax.plot(cx, cy, 'g+', markersize=15, markeredgewidth=3)
+
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+
+        # Title with detection status
+        has_gt = frame in avg_traj_per_frame
+        title = f'Frame {frame+1}/{T} | '
+        if has_detection:
+            title += 'SPIKE DETECTED'
+        else:
+            title += f'No spike (detections at: {spike_frames})'
+        ax.set_title(title, fontsize=11, color='white', pad=10)
+        ax.axis('off')
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=T, interval=1000//fps, blit=False)
+
+    print(f"Saving trajectory video to {output_path}...")
+    writer = PillowWriter(fps=fps)
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black', 'edgecolor': 'none'})
+    print(f"Trajectory video saved: {output_path}")
+
+    plt.close()
+    return anim
+
+
 def animate_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
@@ -1153,6 +1396,7 @@ def main():
     parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
+    parser.add_argument('--trajectory-video', action='store_true', help='Save HONEST trajectory video showing detection ONLY at spike frames')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -1200,7 +1444,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and i < 10
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.trajectory_video) and i < 10
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1299,6 +1543,33 @@ def main():
                     trajectory=trajectory,
                     label=label,
                     output_path=f'tracking_sample_{i:03d}.gif',
+                    fps=args.animation_fps,
+                )
+
+            if args.trajectory_video and i < 10:  # HONEST trajectory video
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': obj['x'] if 'x' in obj.dtype.names else None,
+                                    'y': obj['y'] if 'y' in obj.dtype.names else None,
+                                    't': obj['ts'] if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory: {e}")
+
+                print(f"\nSample {i}: Generating HONEST trajectory video...")
+                create_trajectory_video(
+                    x, raw_spikes,
+                    trajectory=trajectory,
+                    label=label,
+                    output_path=f'trajectory_sample_{i:03d}.gif',
                     fps=args.animation_fps,
                 )
 
