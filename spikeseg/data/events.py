@@ -904,14 +904,15 @@ class EventStreamProcessor(nn.Module):
             if len(x) == 0:
                 return torch.from_numpy(voxel)
         
-        # Normalize timestamps to [0, n_timesteps)
+        # Normalize timestamps to [0, n_timesteps-1]
         t_min, t_max = t.min(), t.max()
         if t_max > t_min:
-            t_norm = (t - t_min) / (t_max - t_min) * (self.n_timesteps - 1e-6)
+            # Map to [0, n_timesteps-1] range, then clip to handle edge cases
+            t_norm = (t - t_min) / (t_max - t_min) * (self.n_timesteps - 1)
         else:
             t_norm = np.zeros_like(t, dtype=np.float32)
-        
-        t_idx = np.clip(t_norm.astype(np.int32), 0, self.n_timesteps - 1)
+
+        t_idx = np.clip(np.round(t_norm).astype(np.int32), 0, self.n_timesteps - 1)
         
         # Clip spatial coordinates
         x = np.clip(x, 0, self.width - 1).astype(np.int32)
