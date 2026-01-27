@@ -762,9 +762,37 @@ def main():
     print("SYSTEMATIC SNN TRACKING EVALUATION")
     print("="*70)
     
+    # Print noise model information
+    print("\n" + "-"*70)
+    print("NOISE MODEL & DATA AUGMENTATION")
+    print("-"*70)
+    print("""
+    SYNTHETIC SATELLITE:
+      - Core intensity: 0.7 (channel 0), 1.0 (channel 1)
+      - Core size: 7x7 pixels with Gaussian falloff
+      - Tail: 5-frame history, fading intensity
+      - Trajectory: Random orbital motion around center
+    
+    NOISE COMPONENTS:
+      1. Hot Pixels (0.1% of image = ~16 pixels)
+         - Fixed locations per sequence (sensor defect simulation)
+         - Weak intensity: 0.1
+      
+      2. Background Noise (scales with noise_level)
+         - Probability: Each pixel has noise_level% chance
+         - Intensity: Random in [0, 0.2 + 0.3*noise_level]
+         - Additive (doesn't overwrite signal)
+    
+    DETECTION:
+      - Receptive field offset correction: (16, 20) pixels
+      - Multi-object: Peak finding with NMS (min_distance=3)
+      - Matching threshold: 15 pixels
+    """)
+    print("-"*70)
+    
     # Setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}")
+    print(f"\nDevice: {device}")
     
     # Load model
     checkpoint_path = '/home/ubuntu/checkpoint_best.pt'
