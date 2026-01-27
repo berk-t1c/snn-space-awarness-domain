@@ -512,30 +512,13 @@ def create_tracking_video(
                     t_scaled = t * (T / T_pred) if T_pred > 0 else t
                     detection_points.append((cx, cy, t_scaled))
 
-    # For each frame, check if GT is near any detection
-    # Strategy: If network detected the satellite at ANY point along its trajectory,
-    # show tracking for ALL frames (this matches the 96% volume-based evaluation)
-    tracking_per_frame = {}  # frame -> (cx, cy) if tracking active
+    # Map actual network detections to frames (REAL detection locations, no fabrication)
+    detections_per_frame = {t: [] for t in range(T)}  # frame -> list of (cx, cy)
 
-    if detection_points and avg_traj_per_frame:
-        det_arr = np.array(detection_points)  # (N, 3) - cx, cy, t
-
-        # First, check if ANY detection is along the trajectory (within 60 pixels of ANY GT point)
-        trajectory_detected = False
-        detection_threshold = 60  # pixels
-
-        for t in avg_traj_per_frame:
-            gt_cx, gt_cy = avg_traj_per_frame[t]
-            spatial_dists = np.sqrt((det_arr[:, 0] - gt_cx)**2 + (det_arr[:, 1] - gt_cy)**2)
-            if np.min(spatial_dists) < detection_threshold:
-                trajectory_detected = True
-                break
-
-        # If network detected the trajectory, show tracking for all frames with GT
-        if trajectory_detected:
-            for t in range(T):
-                if t in avg_traj_per_frame:
-                    tracking_per_frame[t] = avg_traj_per_frame[t]
+    for cx, cy, t_scaled in detection_points:
+        frame_idx = int(round(t_scaled))
+        frame_idx = max(0, min(T - 1, frame_idx))
+        detections_per_frame[frame_idx].append((cx, cy))
 
     # Create custom colormap: black -> blue -> white (for event intensity)
     colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
@@ -575,35 +558,34 @@ def create_tracking_video(
             # Draw cyan crosshair
             ax.plot(cx, cy, 'c+', markersize=12, markeredgewidth=2)
 
-        # Draw network detection box (green/lime) - follows satellite when detected
-        is_tracking = frame in tracking_per_frame
-        if is_tracking:
-            cx, cy = tracking_per_frame[frame]
-            box_size = 25  # slightly larger than GT box
+        # Draw ACTUAL network detections (red/orange boxes) - real model output
+        frame_detections = detections_per_frame.get(frame, [])
+        num_detections = len(frame_detections)
+        for cx, cy in frame_detections:
+            box_size = 25
             det_rect = patches.Rectangle(
                 (cx - box_size/2, cy - box_size/2), box_size, box_size,
-                linewidth=3, edgecolor='lime', facecolor='none',
+                linewidth=3, edgecolor='red', facecolor='none',
                 label='SNN Detection'
             )
             ax.add_patch(det_rect)
-            ax.plot(cx, cy, 'g+', markersize=15, markeredgewidth=3)
+            ax.plot(cx, cy, 'r+', markersize=15, markeredgewidth=3)
 
-        # Draw trajectory trail (last 5 frames) - green where tracked, cyan where not
+        # Draw GT trajectory trail (cyan only - no fake "tracking" coloring)
         trail_frames = range(max(0, frame-5), frame+1)
         for tf in trail_frames[:-1]:  # Don't include current frame
             if tf in avg_traj_per_frame and tf+1 in avg_traj_per_frame:
                 x1, y1 = avg_traj_per_frame[tf]
                 x2, y2 = avg_traj_per_frame[tf+1]
-                color = 'lime' if tf in tracking_per_frame else 'cyan'
-                ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.7)
+                ax.plot([x1, x2], [y1, y2], color='cyan', linewidth=2, alpha=0.7)
 
         ax.set_xlim(0, W)
         ax.set_ylim(H, 0)
 
-        # Title with info
+        # Title with HONEST info
         has_gt = frame in avg_traj_per_frame
         title = f'Frame {frame+1}/{T} | '
-        title += f'SNN Detection: {"TRACKING" if is_tracking else "---"} | GT: {"visible" if has_gt else "none"}'
+        title += f'SNN Detections: {num_detections} | GT: {"visible" if has_gt else "none"}'
         ax.set_title(title, fontsize=12, color='white', pad=10)
         ax.axis('off')
 
