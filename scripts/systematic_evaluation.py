@@ -192,25 +192,16 @@ class SyntheticDataGenerator:
         
         # Then add noise (realistic model: additive noise that can partially obscure signal)
         if noise_level > 0:
-            # Number of noise events proportional to noise_level
-            # At 100% noise, we have as many noise pixels as image pixels
-            n_noise_pixels = int(noise_level * self.H * self.W)
+            # Probabilistic noise: each pixel has noise_level chance of getting noise
+            noise_mask = torch.rand(self.H, self.W) < noise_level
             
-            if n_noise_pixels > 0:
-                # Random positions for noise
-                noise_y = torch.randint(0, self.H, (n_noise_pixels,))
-                noise_x = torch.randint(0, self.W, (n_noise_pixels,))
-                
-                # Noise intensity varies: some weak, some strong
-                # Scale intensity with noise level (higher noise = stronger noise events)
-                base_intensity = 0.3 + 0.5 * noise_level  # 0.3 at low noise, 0.8 at high noise
-                noise_vals = torch.rand(n_noise_pixels) * base_intensity
-                
-                # Add noise (additive, can stack)
-                for i in range(n_noise_pixels):
-                    y, x = noise_y[i].item(), noise_x[i].item()
-                    frame[0, y, x] = min(1.0, frame[0, y, x] + noise_vals[i] * 0.3)
-                    frame[1, y, x] = min(1.0, frame[1, y, x] + noise_vals[i] * 1.0)
+            # Noise intensity scales with noise_level (higher noise = stronger)
+            base_intensity = 0.2 + 0.4 * noise_level  # 0.2 at low, 0.6 at high
+            noise_intensity = torch.rand(self.H, self.W) * base_intensity
+            
+            # Additive noise (doesn't completely overwrite signal)
+            frame[0] = torch.clamp(frame[0] + noise_mask.float() * noise_intensity * 0.3, 0, 1)
+            frame[1] = torch.clamp(frame[1] + noise_mask.float() * noise_intensity * 1.0, 0, 1)
         
         return frame
     
@@ -282,7 +273,7 @@ class EvaluationEngine:
         self,
         detections: List[Tuple[float, float]],
         gt_positions: List[Tuple[float, float]],
-        max_distance: float = 30.0
+        max_distance: float = 15.0  # Tighter threshold: must be within 15px
     ) -> Tuple[List[float], int]:
         """Match detections to ground truth, return errors and count of matched GT."""
         errors = []
@@ -752,12 +743,10 @@ def main():
     Path(config.output_dir).mkdir(exist_ok=True)
     
     # ==========================================================================
-    # 1. NOISE SWEEP (Extended to 99.6%, finer after 85%)
+    # 1. NOISE SWEEP (Key levels to show degradation curve)
     # ==========================================================================
     noise_levels = [
-        0.0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50,
-        0.60, 0.70, 0.80, 0.85,  # Coarse up to 85%
-        0.87, 0.89, 0.91, 0.93, 0.95, 0.96, 0.97, 0.98, 0.99, 0.996  # Fine after 85%
+        0.0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70
     ]
     noise_results = engine.run_noise_sweep(noise_levels, n_objects=1)
     
