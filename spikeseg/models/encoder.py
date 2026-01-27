@@ -533,31 +533,36 @@ class SpikingEncoderLayer(nn.Module):
         # Note: LIFNeuron is stateless - membrane is managed here
     
     def forward(
-        self, 
+        self,
         x: torch.Tensor,
-        dynamic_threshold: Optional[torch.Tensor] = None
+        dynamic_threshold: Optional[torch.Tensor] = None,
+        fire_once: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass for single timestep.
-        
+
         Args:
             x: Input tensor (spikes), shape (batch, in_channels, H, W).
             dynamic_threshold: Optional per-channel thresholds for homeostasis.
                               Shape: (out_channels,). If provided, overrides the
                               neuron's fixed threshold for adaptive firing control.
                               (Diehl & Cook 2015, Lee et al. 2018)
-        
+            fire_once: If True, neurons can only fire once per stimulus (for STDP training).
+                      If False, neurons can fire multiple times (for inference).
+                      (Kheradpisheh 2018 uses fire-once for training, but inference
+                      with high leak allows multiple firings as in IGARSS 2023 paper)
+
         Returns:
             Tuple of (output_spikes, membrane_potential).
         """
         _validate_4d_tensor(x, "input")
-        
+
         if x.shape[1] != self.in_channels:
             raise EncoderRuntimeError(
                 f"Input channels ({x.shape[1]}) doesn't match "
                 f"expected ({self.in_channels})"
             )
-        
+
         # Convolution
         current = self.conv(x)
 
@@ -565,19 +570,23 @@ class SpikingEncoderLayer(nn.Module):
         if self.membrane is None or self.membrane.shape != current.shape:
             self.membrane = torch.zeros_like(current)
 
-        # Initialize fire-once tracking if needed (Kheradpisheh 2018)
-        if self.has_fired is None or self.has_fired.shape != current.shape:
-            self.has_fired = torch.zeros_like(current)
+        # Fire-once constraint (optional, for STDP training)
+        # During inference, disable fire_once to allow continuous tracking
+        has_fired_mask = None
+        if fire_once:
+            # Initialize fire-once tracking if needed (Kheradpisheh 2018)
+            if self.has_fired is None or self.has_fired.shape != current.shape:
+                self.has_fired = torch.zeros_like(current)
+            has_fired_mask = self.has_fired
 
-        # LIF dynamics with fire-once constraint and optional adaptive threshold
-        # (Kheradpisheh 2018: "neurons are not allowed to fire more than once per stimulus")
-        # (Diehl & Cook 2015: adaptive thresholds for homeostasis)
+        # LIF dynamics with optional fire-once constraint and adaptive threshold
         spikes, self.membrane, self.pre_reset_membrane = self.neuron(
-            current, self.membrane, self.has_fired, dynamic_threshold
+            current, self.membrane, has_fired_mask, dynamic_threshold
         )
 
-        # Update fire-once mask
-        self.has_fired = torch.clamp(self.has_fired + spikes, 0.0, 1.0)
+        # Update fire-once mask (only if fire_once is enabled)
+        if fire_once:
+            self.has_fired = torch.clamp(self.has_fired + spikes, 0.0, 1.0)
 
         return spikes, self.membrane
     
@@ -733,52 +742,55 @@ class SpikeSEGEncoder(nn.Module):
     def forward_single_timestep(
         self,
         x: torch.Tensor,
-        layer_thresholds: Optional[Dict[str, torch.Tensor]] = None
+        layer_thresholds: Optional[Dict[str, torch.Tensor]] = None,
+        fire_once: bool = True
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Forward pass for a single timestep.
-        
+
         Args:
             x: Input events/spikes, shape (batch, channels, H, W).
             layer_thresholds: Optional dict mapping layer names ('conv1', 'conv2', 'conv3')
                              to per-channel threshold tensors (shape: (out_channels,)).
                              Used for adaptive homeostasis during STDP training.
                              (Diehl & Cook 2015, Lee et al. 2018)
-        
+            fire_once: If True, neurons can only fire once (STDP training).
+                      If False, neurons can fire multiple times (inference mode).
+
         Returns:
             Tuple of (classification_spikes, layer_spikes_dict).
         """
         _validate_4d_tensor(x, "input")
-        
+
         layer_spikes = {}
-        
+
         # Get thresholds for each layer (None if not provided)
         thresh_conv1 = layer_thresholds.get('conv1') if layer_thresholds else None
         thresh_conv2 = layer_thresholds.get('conv2') if layer_thresholds else None
         thresh_conv3 = layer_thresholds.get('conv3') if layer_thresholds else None
-        
+
         # Conv1
-        spikes1, mem1 = self.conv1(x, thresh_conv1)
+        spikes1, mem1 = self.conv1(x, thresh_conv1, fire_once=fire_once)
         layer_spikes['conv1'] = spikes1
-        
+
         # Pool1 (store indices and input size for decoder)
         self._pool1_input_size = tuple(spikes1.shape)
         pooled1, self._pool1_indices = self.pool1(spikes1)
         layer_spikes['pool1'] = pooled1
-        
+
         # Conv2
-        spikes2, mem2 = self.conv2(pooled1, thresh_conv2)
+        spikes2, mem2 = self.conv2(pooled1, thresh_conv2, fire_once=fire_once)
         layer_spikes['conv2'] = spikes2
-        
+
         # Pool2 (store indices and input size for decoder)
         self._pool2_input_size = tuple(spikes2.shape)
         pooled2, self._pool2_indices = self.pool2(spikes2)
         layer_spikes['pool2'] = pooled2
-        
+
         # Conv3 (classification)
-        spikes3, mem3 = self.conv3(pooled2, thresh_conv3)
+        spikes3, mem3 = self.conv3(pooled2, thresh_conv3, fire_once=fire_once)
         layer_spikes['conv3'] = spikes3
-        
+
         return spikes3, layer_spikes
     
     def forward(
@@ -786,32 +798,37 @@ class SpikeSEGEncoder(nn.Module):
         x: torch.Tensor,
         n_timesteps: Optional[int] = None,
         reset_state: bool = True,
-        layer_thresholds: Optional[Dict[str, torch.Tensor]] = None
+        layer_thresholds: Optional[Dict[str, torch.Tensor]] = None,
+        fire_once: bool = True
     ) -> EncoderOutput:
         """
         Forward pass for event sequence.
-        
+
         Args:
             x: Input tensor. Can be:
                - 4D (batch, channels, H, W): Single timestep
                - 5D (timesteps, batch, channels, H, W): Sequence
-            n_timesteps: Number of timesteps (required if x is 4D and 
+            n_timesteps: Number of timesteps (required if x is 4D and
                         should be processed multiple times).
             reset_state: Reset membrane potentials before processing.
             layer_thresholds: Optional dict mapping layer names ('conv1', 'conv2', 'conv3')
                              to per-channel threshold tensors (shape: (out_channels,)).
                              Used for adaptive homeostasis during STDP training.
-                             
+
                              Example:
                                  layer_thresholds = {
                                      'conv2': threshold_manager.get_threshold(),  # (36,)
                                      'conv3': threshold_manager.get_threshold(),  # (n_classes,)
                                  }
-                             
+
                              Paper Reference (Diehl & Cook 2015, Lee et al. 2018):
                                  "On spike: increase threshold of entire feature map"
                                  "On non-firing: exponentially decay toward rest"
-        
+            fire_once: If True (default), neurons fire at most once per stimulus.
+                      Required for STDP training (Kheradpisheh 2018).
+                      If False, neurons can fire multiple times - use for inference
+                      to enable continuous tracking (IGARSS 2023 paper behavior).
+
         Returns:
             EncoderOutput containing classification spikes and pooling indices.
         """
@@ -848,7 +865,7 @@ class SpikeSEGEncoder(nn.Module):
 
         for t in range(n_timesteps):
             class_spikes_t, layer_spikes_t = self.forward_single_timestep(
-                x[t], layer_thresholds
+                x[t], layer_thresholds, fire_once=fire_once
             )
             all_class_spikes.append(class_spikes_t)
 

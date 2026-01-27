@@ -226,6 +226,7 @@ def detect_satellites(
     min_cluster_pixels: int = 2,
     return_spikes: bool = False,
     return_pooling_indices: bool = False,
+    inference_mode: bool = False,
 ) -> List[BoundingBox]:
     """
     Run inference and return detected satellite bounding boxes.
@@ -237,6 +238,8 @@ def detect_satellites(
         min_cluster_pixels: Minimum cluster size to count as detection
         return_spikes: If True, also return raw classification spikes for visualization
         return_pooling_indices: If True, also return pooling indices for HULK decoder
+        inference_mode: If True, disable fire-once constraint for continuous tracking.
+                       Neurons can fire multiple times as satellite moves (IGARSS 2023).
 
     Returns:
         List of BoundingBox for detected satellites
@@ -257,7 +260,8 @@ def detect_satellites(
         input_h, input_w = events.shape[-2], events.shape[-1]
 
         # Forward pass
-        output = model(events)
+        # inference_mode=True disables fire-once for continuous tracking
+        output = model(events, fire_once=not inference_mode)
 
         # Store raw spikes for 3D visualization (T, B, C, H, W)
         raw_spikes = output.classification_spikes.clone()
@@ -333,6 +337,7 @@ def run_hulk_smash_tracking(
     device: torch.device,
     previous_objects: Optional[list] = None,
     smash_threshold: float = 0.0,
+    inference_mode: bool = False,
 ):
     """
     Run HULK/SMASH instance segmentation and tracking.
@@ -348,6 +353,8 @@ def run_hulk_smash_tracking(
         events: Input tensor (T, C, H, W) or (T, B, C, H, W)
         device: Compute device
         previous_objects: Objects from previous sequence for tracking (optional)
+        smash_threshold: Minimum SMASH score to group instances (default 0.0)
+        inference_mode: If True, disable fire-once for continuous tracking
         smash_threshold: Minimum SMASH score to group instances (default: 0.0)
 
     Returns:
@@ -372,8 +379,8 @@ def run_hulk_smash_tracking(
         events = events.to(device)
         T = events.shape[0]
 
-        # Forward pass
-        output = model(events)
+        # Forward pass (inference_mode disables fire-once for continuous tracking)
+        output = model(events, fire_once=not inference_mode)
 
         # Get classification spikes and pooling indices
         class_spikes = output.classification_spikes  # (T, B, C, H, W)
@@ -1734,6 +1741,8 @@ def main():
     parser.add_argument('--trajectory-video', action='store_true', help='Save HONEST trajectory video showing detection ONLY at spike frames')
     parser.add_argument('--hulk-tracking', action='store_true', help='Use HULK/SMASH for instance segmentation and tracking')
     parser.add_argument('--demo-tracking', action='store_true', help='Create DEMO video: detection (red) then tracking (green)')
+    parser.add_argument('--inference-mode', action='store_true',
+                        help='Disable fire-once constraint for continuous tracking (IGARSS 2023 paper behavior)')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--max-vis', type=int, default=10, help='Max samples to visualize (default: 10, use -1 for all)')
@@ -1787,7 +1796,8 @@ def main():
 
             # Get boxes and optionally raw spikes for 3D viz/animation
             need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.trajectory_video or args.demo_tracking) and (args.max_vis < 0 or i < args.max_vis)
-            result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
+            result_data = detect_satellites(model, x, device, return_spikes=need_spikes,
+                                           inference_mode=args.inference_mode)
 
             if need_spikes:
                 boxes, raw_spikes = result_data
@@ -1919,7 +1929,8 @@ def main():
                 print(f"\nSample {i}: Running HULK/SMASH tracking...")
                 hulk_result = run_hulk_smash_tracking(
                     model, x, device,
-                    previous_objects=previous_objects  # Link to previous for tracking!
+                    previous_objects=previous_objects,  # Link to previous for tracking!
+                    inference_mode=args.inference_mode
                 )
 
                 print(f"  Classification spikes: {hulk_result['n_spikes']}")
