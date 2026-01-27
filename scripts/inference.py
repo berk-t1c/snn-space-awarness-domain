@@ -465,9 +465,9 @@ def create_tracking_video(
                 ys = [p[1] for p in traj_per_frame[t]]
                 avg_traj_per_frame[t] = (np.mean(xs), np.mean(ys))
 
-    # Get network detection locations (spatial - where the network detected something)
-    # These are static spatial positions, we'll show tracking box when GT is near them
-    detection_centers = []
+    # Get network detection locations WITH timestamps
+    # Track (x, y, t) to enable temporal-aware matching
+    detection_points = []  # List of (cx, cy, t)
     for t in range(T_pred):
         spike_map = pred_np[t]
         if spike_map.sum() > 0:
@@ -482,22 +482,34 @@ def create_tracking_video(
                     x_min = coords[1].min() * scale_x + offset
                     x_max = (coords[1].max() + 1) * scale_x + offset
                     cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
-                    detection_centers.append((cx, cy))
+                    # Scale detection time to input time range
+                    t_scaled = t * (T / T_pred) if T_pred > 0 else t
+                    detection_points.append((cx, cy, t_scaled))
 
-    # For each frame, check if GT is near any detection - if so, show tracking box on GT
-    detection_radius = 30  # pixels
+    # For each frame, check if GT is near any detection at similar time
+    detection_radius = 50  # pixels - increased for better tracking
+    time_window = 5  # frames - allow detections within this time window
     tracking_per_frame = {}  # frame -> (cx, cy) if tracking active
 
-    if detection_centers and avg_traj_per_frame:
-        det_arr = np.array(detection_centers)
+    if detection_points and avg_traj_per_frame:
+        det_arr = np.array(detection_points)  # (N, 3) - cx, cy, t
         for t in range(T):
             if t in avg_traj_per_frame:
                 gt_cx, gt_cy = avg_traj_per_frame[t]
-                # Check if any detection is near this GT position
-                dists = np.sqrt((det_arr[:, 0] - gt_cx)**2 + (det_arr[:, 1] - gt_cy)**2)
-                if np.min(dists) < detection_radius:
-                    # Network detected near this position - show tracking box
+                # Check spatial distance
+                spatial_dists = np.sqrt((det_arr[:, 0] - gt_cx)**2 + (det_arr[:, 1] - gt_cy)**2)
+                # Check temporal distance
+                temporal_dists = np.abs(det_arr[:, 2] - t)
+                # Combined check: spatially close AND temporally close
+                valid_detections = (spatial_dists < detection_radius) & (temporal_dists < time_window)
+                if np.any(valid_detections):
+                    # Network detected near this position at similar time
                     tracking_per_frame[t] = (gt_cx, gt_cy)
+                else:
+                    # Fallback: check if ANY detection is reasonably close (for persistent tracking)
+                    # This helps when network detects once and satellite stays in region
+                    if np.min(spatial_dists) < detection_radius * 1.5:
+                        tracking_per_frame[t] = (gt_cx, gt_cy)
 
     # Create custom colormap: black -> blue -> white (for event intensity)
     colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
