@@ -436,10 +436,15 @@ def run_hulk_smash_tracking(
 
         # Match with previous objects if provided
         matches = {}
-        if previous_objects:
-            matches = match_objects_across_sequences(
-                objects, previous_objects, similarity_threshold=0.1
-            )
+        if previous_objects and objects:
+            try:
+                matches = match_objects_across_sequences(
+                    objects, previous_objects, similarity_threshold=0.1
+                )
+            except ValueError as e:
+                # ASH dimension mismatch (different n_timesteps between sequences)
+                print(f"  Warning: Cross-sequence matching failed: {e}")
+                matches = {}
 
         return {
             'objects': objects,
