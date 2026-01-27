@@ -210,8 +210,15 @@ def load_model(checkpoint_path: str, device: torch.device, inference_threshold: 
     ]):
         layer = getattr(model, layer_name)
         if hasattr(layer, 'neuron'):
-            layer.neuron.threshold.fill_(inference_threshold)
-            layer.neuron.leak.fill_(leak_val)
+            # Handle both tensor buffers and scalar attributes
+            if hasattr(layer.neuron.threshold, 'fill_'):
+                layer.neuron.threshold.fill_(inference_threshold)
+            else:
+                layer.neuron.threshold = inference_threshold
+            if hasattr(layer.neuron.leak, 'fill_'):
+                layer.neuron.leak.fill_(leak_val)
+            else:
+                layer.neuron.leak = leak_val
 
     model.to(device)
     model.eval()
@@ -581,7 +588,7 @@ def create_tracking_video(
     T_pred, H_pred, W_pred = pred_np.shape
     scale_y = H / H_pred
     scale_x = W / W_pred
-    offset = 12
+    offset = 28  # Correct receptive field offset (was 12)
 
     # Get trajectory positions per frame
     traj_per_frame = {t: [] for t in range(T)}
@@ -810,7 +817,7 @@ def visualize_3d_trajectory(
     # Scale and offset for predictions
     scale_y = H_input / H_pred
     scale_x = W_input / W_pred
-    offset = 12
+    offset = 28  # Correct receptive field offset (was 12)
 
     # Extract PREDICTION coordinates (Network Output)
     # First pass: get raw prediction locations and active timesteps
@@ -1053,7 +1060,7 @@ def create_trajectory_video(
     T_pred, H_pred, W_pred = pred_np.shape
     scale_y = H / H_pred
     scale_x = W / W_pred
-    offset = 12
+    offset = 28  # Correct receptive field offset (was 12)
 
     # Get GT trajectory positions
     avg_traj_per_frame = {}
@@ -1525,7 +1532,7 @@ def animate_3d_trajectory(
     # Scale and offset for predictions
     scale_y = H_input / H_pred
     scale_x = W_input / W_pred
-    offset = 12
+    offset = 28  # Correct receptive field offset (was 12)
 
     # Extract ground truth coordinates per timestep
     gt_per_timestep = {t: {'x': [], 'y': []} for t in range(T_input)}
