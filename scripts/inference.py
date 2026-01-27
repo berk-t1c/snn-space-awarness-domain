@@ -225,6 +225,7 @@ def detect_satellites(
     device: torch.device,
     min_cluster_pixels: int = 2,
     return_spikes: bool = False,
+    return_pooling_indices: bool = False,
 ) -> List[BoundingBox]:
     """
     Run inference and return detected satellite bounding boxes.
@@ -235,10 +236,12 @@ def detect_satellites(
         device: Compute device
         min_cluster_pixels: Minimum cluster size to count as detection
         return_spikes: If True, also return raw classification spikes for visualization
+        return_pooling_indices: If True, also return pooling indices for HULK decoder
 
     Returns:
         List of BoundingBox for detected satellites
         If return_spikes=True: (boxes, classification_spikes)
+        If return_pooling_indices=True: (boxes, classification_spikes, pooling_indices)
     """
     model.eval()
 
@@ -258,6 +261,9 @@ def detect_satellites(
 
         # Store raw spikes for 3D visualization (T, B, C, H, W)
         raw_spikes = output.classification_spikes.clone()
+
+        # Store pooling indices for HULK decoder
+        pooling_indices = output.pooling_indices if return_pooling_indices else None
 
         # Get classification spikes: (T, B, C, H, W) -> sum over time
         class_spikes = output.classification_spikes.sum(dim=0)  # (B, C, H, W)
@@ -314,9 +320,133 @@ def detect_satellites(
                     confidence=float(confidence)
                 ))
 
+        if return_pooling_indices:
+            return all_boxes, raw_spikes, pooling_indices
         if return_spikes:
             return all_boxes, raw_spikes
         return all_boxes
+
+
+def run_hulk_smash_tracking(
+    model: SpikeSEGEncoder,
+    events: torch.Tensor,
+    device: torch.device,
+    previous_objects: Optional[list] = None,
+    smash_threshold: float = 0.0,
+):
+    """
+    Run HULK/SMASH instance segmentation and tracking.
+
+    This implements the full pipeline from the Kirkland et al. 2022 paper:
+    1. HULK: Decode each classification spike back to pixel space
+    2. ASH: Create Active Spike Hash for each instance
+    3. SMASH: Group instances into objects using SMASH scores
+    4. Track: Match objects across sequences
+
+    Args:
+        model: Loaded SpikeSEG encoder
+        events: Input tensor (T, C, H, W) or (T, B, C, H, W)
+        device: Compute device
+        previous_objects: Objects from previous sequence for tracking (optional)
+        smash_threshold: Minimum SMASH score to group instances (default: 0.0)
+
+    Returns:
+        Dict with:
+            - 'objects': List of Object instances detected
+            - 'instances': List of Instance instances (before grouping)
+            - 'matches': Dict mapping current object IDs to previous object IDs
+            - 'n_spikes': Total number of classification spikes processed
+    """
+    from spikeseg.algorithms.hulk import HULKDecoder
+    from spikeseg.algorithms.smash import group_instances_to_objects, match_objects_across_sequences
+
+    model.eval()
+
+    with torch.no_grad():
+        # Ensure correct shape: (T, B, C, H, W)
+        if events.dim() == 4:
+            events = events.unsqueeze(1)
+        elif events.dim() == 5 and events.shape[0] != events.shape[1]:
+            events = events.permute(1, 0, 2, 3, 4)
+
+        events = events.to(device)
+        T = events.shape[0]
+
+        # Forward pass
+        output = model(events)
+
+        # Get classification spikes and pooling indices
+        class_spikes = output.classification_spikes  # (T, B, C, H, W)
+        pool_indices = output.pooling_indices
+
+        # Create HULK decoder from encoder weights
+        hulk = HULKDecoder.from_encoder(model)
+
+        # Process batch item 0 (single sample)
+        # Reshape class_spikes: (T, B, C, H, W) -> (T, C, H, W) for batch 0
+        class_spikes_b0 = class_spikes[:, 0, :, :, :]  # (T, C, H, W)
+
+        # Count total spikes
+        n_spikes = int(class_spikes_b0.sum().item())
+
+        if n_spikes == 0:
+            return {
+                'objects': [],
+                'instances': [],
+                'matches': {},
+                'n_spikes': 0
+            }
+
+        # Get pooling indices for batch 0
+        # HULK expects batch size = 1, so slice if needed
+        pool1_idx = pool_indices.pool1_indices
+        pool2_idx = pool_indices.pool2_indices
+        pool1_size = pool_indices.pool1_output_size
+        pool2_size = pool_indices.pool2_output_size
+
+        # Ensure pooling indices have batch size = 1
+        if pool1_idx.shape[0] > 1:
+            pool1_idx = pool1_idx[0:1]
+        if pool2_idx.shape[0] > 1:
+            pool2_idx = pool2_idx[0:1]
+
+        # Use HULK to process all classification spikes into instances
+        try:
+            instances = hulk.process_to_instances(
+                classification_spikes=class_spikes_b0,
+                pool1_indices=pool1_idx,
+                pool2_indices=pool2_idx,
+                pool1_output_size=pool1_size,
+                pool2_output_size=pool2_size,
+                n_timesteps=T,
+                threshold=0.5
+            )
+        except Exception as e:
+            print(f"HULK processing failed: {e}")
+            return {
+                'objects': [],
+                'instances': [],
+                'matches': {},
+                'n_spikes': n_spikes,
+                'error': str(e)
+            }
+
+        # Group instances into objects using SMASH
+        objects = group_instances_to_objects(instances, smash_threshold=smash_threshold)
+
+        # Match with previous objects if provided
+        matches = {}
+        if previous_objects:
+            matches = match_objects_across_sequences(
+                objects, previous_objects, similarity_threshold=0.1
+            )
+
+        return {
+            'objects': objects,
+            'instances': instances,
+            'matches': matches,
+            'n_spikes': n_spikes
+        }
 
 
 def visualize_detections(
@@ -835,6 +965,249 @@ def visualize_3d_trajectory(
     return fig
 
 
+def create_trajectory_video(
+    events: torch.Tensor,
+    predictions: torch.Tensor,
+    trajectory: Optional[dict] = None,
+    label: Optional[torch.Tensor] = None,
+    output_path: str = "trajectory_video.gif",
+    fps: int = 5,
+):
+    """
+    Create HONEST trajectory video showing ONLY actual network detections.
+
+    This visualization shows:
+    - Cyan dashed box: Ground truth satellite position
+    - Green box: Network detection ONLY at frames where spikes actually occurred
+    - Green trajectory line: Connects actual detection positions over time
+    - Shows the network's ability to follow the satellite trajectory through multiple detections
+
+    Unlike tracking video, this does NOT interpolate or fill in missing frames.
+    Detection boxes appear ONLY when/where the network actually fired.
+
+    Args:
+        events: Input events tensor (T, C, H, W) or (T, B, C, H, W)
+        predictions: Model output spikes (T, B, C, H, W)
+        trajectory: Dict with 'x', 'y', 't' arrays (actual object trajectory)
+        label: Ground truth mask (H, W)
+        output_path: Path to save video (.gif)
+        fps: Frames per second
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.colors import LinearSegmentedColormap
+
+    def safe_flatten(arr):
+        """Safely flatten nested MATLAB arrays."""
+        if arr is None:
+            return np.array([])
+        arr = np.asarray(arr)
+        while arr.dtype == object and arr.size > 0:
+            try:
+                arr = np.concatenate([np.asarray(x).ravel() for x in arr.ravel()])
+            except:
+                break
+        return arr.ravel().astype(float)
+
+    # Get events per timestep
+    events_np = events.cpu().numpy() if isinstance(events, torch.Tensor) else events
+    if events_np.ndim == 5:
+        events_np = events_np[:, 0, :, :, :]  # (T, C, H, W)
+
+    if events_np.ndim == 4 and events_np.shape[1] >= 2:
+        pos_events = events_np[:, 0, :, :]
+        neg_events = events_np[:, 1, :, :]
+        combined = pos_events + neg_events
+    else:
+        if events_np.ndim == 4:
+            combined = events_np.sum(axis=1)
+        else:
+            combined = events_np
+
+    T, H, W = combined.shape
+
+    # Get predictions
+    pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+    if pred_np.ndim == 5:
+        pred_np = pred_np[:, 0, :, :, :]
+    if pred_np.ndim == 4:
+        pred_np = pred_np.sum(axis=1)
+
+    T_pred, H_pred, W_pred = pred_np.shape
+    scale_y = H / H_pred
+    scale_x = W / W_pred
+    offset = 12
+
+    # Get GT trajectory positions
+    avg_traj_per_frame = {}
+    if trajectory is not None and trajectory.get('x') is not None:
+        traj_x = safe_flatten(trajectory['x'])
+        traj_y = safe_flatten(trajectory['y'])
+        traj_t = safe_flatten(trajectory['t'])
+
+        orig_w, orig_h = 240, 180
+        scale_x_traj = W / orig_w
+        scale_y_traj = H / orig_h
+
+        if len(traj_t) > 0:
+            t_min, t_max = float(traj_t.min()), float(traj_t.max())
+            if t_max > t_min:
+                traj_t_norm = (traj_t - t_min) / (t_max - t_min) * (T - 1)
+                traj_per_frame = {t: [] for t in range(T)}
+                for tx, ty, tt in zip(traj_x, traj_y, traj_t_norm):
+                    t_bin = int(np.clip(tt, 0, T - 1))
+                    traj_per_frame[t_bin].append((tx * scale_x_traj, ty * scale_y_traj))
+
+                for t in range(T):
+                    if traj_per_frame[t]:
+                        xs = [p[0] for p in traj_per_frame[t]]
+                        ys = [p[1] for p in traj_per_frame[t]]
+                        avg_traj_per_frame[t] = (np.mean(xs), np.mean(ys))
+
+        # Interpolate GT trajectory to fill all frames
+        if avg_traj_per_frame:
+            known_frames = sorted(avg_traj_per_frame.keys())
+            if len(known_frames) >= 2:
+                for t in range(T):
+                    if t not in avg_traj_per_frame:
+                        prev_f = max([f for f in known_frames if f <= t], default=known_frames[0])
+                        next_f = min([f for f in known_frames if f >= t], default=known_frames[-1])
+                        if prev_f == next_f:
+                            avg_traj_per_frame[t] = avg_traj_per_frame[prev_f]
+                        else:
+                            alpha = (t - prev_f) / (next_f - prev_f)
+                            x_interp = avg_traj_per_frame[prev_f][0] + alpha * (avg_traj_per_frame[next_f][0] - avg_traj_per_frame[prev_f][0])
+                            y_interp = avg_traj_per_frame[prev_f][1] + alpha * (avg_traj_per_frame[next_f][1] - avg_traj_per_frame[prev_f][1])
+                            avg_traj_per_frame[t] = (x_interp, y_interp)
+
+    # HONEST detection: Get actual spike locations at each timestep
+    # This is the key difference - we show detection ONLY where spikes occurred
+    detection_per_frame = {}  # frame -> (cx, cy) ONLY if spikes at this frame
+    spike_frames = []  # List of frames with actual spikes
+
+    for t in range(T_pred):
+        spike_map = pred_np[t]
+        if spike_map.sum() > 0:
+            from scipy import ndimage
+            binary_map = (spike_map > 0).astype(np.uint8)
+            labeled, num = ndimage.label(binary_map)
+
+            frame_detections = []
+            for i in range(1, num + 1):
+                coords = np.where(labeled == i)
+                if len(coords[0]) >= 1:
+                    y_min = coords[0].min() * scale_y + offset
+                    y_max = (coords[0].max() + 1) * scale_y + offset
+                    x_min = coords[1].min() * scale_x + offset
+                    x_max = (coords[1].max() + 1) * scale_x + offset
+                    cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+                    frame_detections.append((cx, cy))
+
+            if frame_detections:
+                # Scale timestep to input time range
+                t_scaled = int(round(t * (T / T_pred))) if T_pred > 0 else t
+                t_scaled = max(0, min(t_scaled, T - 1))
+
+                # Average all detections at this frame
+                avg_x = np.mean([d[0] for d in frame_detections])
+                avg_y = np.mean([d[1] for d in frame_detections])
+                detection_per_frame[t_scaled] = (avg_x, avg_y)
+                spike_frames.append(t_scaled)
+
+    print(f"  HONEST detections at frames: {sorted(detection_per_frame.keys())}")
+
+    # Build detection trajectory line (connects detection points)
+    detection_trajectory = []  # List of (x, y, t) for all detections in order
+    for t in sorted(detection_per_frame.keys()):
+        cx, cy = detection_per_frame[t]
+        detection_trajectory.append((cx, cy, t))
+
+    # Create colormap
+    colors = ['black', '#001133', '#003366', '#0066cc', '#3399ff', 'white']
+    event_cmap = LinearSegmentedColormap.from_list('events', colors)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
+
+    def update(frame):
+        ax.clear()
+        ax.set_facecolor('black')
+
+        # Accumulate events
+        window = 5
+        start = max(0, frame - window + 1)
+        accumulated = np.sum(combined[start:frame+1], axis=0)
+
+        if accumulated.max() > 0:
+            accumulated = accumulated / accumulated.max()
+
+        ax.imshow(accumulated, cmap=event_cmap, vmin=0, vmax=1, interpolation='nearest')
+
+        # Draw GT bounding box (cyan dashed)
+        box_size = 20
+        if frame in avg_traj_per_frame:
+            cx, cy = avg_traj_per_frame[frame]
+            gt_rect = patches.Rectangle(
+                (cx - box_size/2, cy - box_size/2), box_size, box_size,
+                linewidth=2, edgecolor='cyan', facecolor='none', linestyle='--',
+                label='Ground Truth'
+            )
+            ax.add_patch(gt_rect)
+            ax.plot(cx, cy, 'c+', markersize=12, markeredgewidth=2)
+
+        # Draw detection trajectory line (green) - connects all past detections
+        past_detections = [(x, y, t) for x, y, t in detection_trajectory if t <= frame]
+        if len(past_detections) >= 2:
+            for i in range(len(past_detections) - 1):
+                x1, y1, t1 = past_detections[i]
+                x2, y2, t2 = past_detections[i + 1]
+                ax.plot([x1, x2], [y1, y2], color='lime', linewidth=2, alpha=0.8)
+
+        # Draw detection points for all past detections (small green dots)
+        for x, y, t in past_detections:
+            ax.plot(x, y, 'go', markersize=6, alpha=0.6)
+
+        # Draw ACTUAL detection box ONLY if this frame has a spike
+        has_detection = frame in detection_per_frame
+        if has_detection:
+            cx, cy = detection_per_frame[frame]
+            det_box_size = 25
+            det_rect = patches.Rectangle(
+                (cx - det_box_size/2, cy - det_box_size/2), det_box_size, det_box_size,
+                linewidth=3, edgecolor='lime', facecolor='none',
+                label='SNN Detection'
+            )
+            ax.add_patch(det_rect)
+            ax.plot(cx, cy, 'g+', markersize=15, markeredgewidth=3)
+
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+
+        # Title with detection status
+        has_gt = frame in avg_traj_per_frame
+        title = f'Frame {frame+1}/{T} | '
+        if has_detection:
+            title += 'SPIKE DETECTED'
+        else:
+            title += f'No spike (detections at: {spike_frames})'
+        ax.set_title(title, fontsize=11, color='white', pad=10)
+        ax.axis('off')
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=T, interval=1000//fps, blit=False)
+
+    print(f"Saving trajectory video to {output_path}...")
+    writer = PillowWriter(fps=fps)
+    anim.save(output_path, writer=writer, savefig_kwargs={'facecolor': 'black', 'edgecolor': 'none'})
+    print(f"Trajectory video saved: {output_path}")
+
+    plt.close()
+    return anim
+
+
 def animate_3d_trajectory(
     events: torch.Tensor,
     predictions: torch.Tensor,
@@ -1123,6 +1496,8 @@ def main():
     parser.add_argument('--visualize-3d', action='store_true', help='Save 3D trajectory visualization (paper style)')
     parser.add_argument('--animate-3d', action='store_true', help='Save animated 3D visualization showing detections one by one')
     parser.add_argument('--tracking-video', action='store_true', help='Save 2D tracking video with bounding boxes')
+    parser.add_argument('--trajectory-video', action='store_true', help='Save HONEST trajectory video showing detection ONLY at spike frames')
+    parser.add_argument('--hulk-tracking', action='store_true', help='Use HULK/SMASH for instance segmentation and tracking')
     parser.add_argument('--animation-fps', type=int, default=10, help='Animation frames per second')
     parser.add_argument('--animation-trail', type=int, default=0, help='Trail length (0 = show all history)')
     parser.add_argument('--max-vis', type=int, default=10, help='Max samples to visualize (default: 10, use -1 for all)')
@@ -1171,7 +1546,7 @@ def main():
             x = x.unsqueeze(1)
 
             # Get boxes and optionally raw spikes for 3D viz/animation
-            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video) and (args.max_vis < 0 or i < args.max_vis)
+            need_spikes = (args.visualize_3d or args.animate_3d or args.tracking_video or args.trajectory_video) and (args.max_vis < 0 or i < args.max_vis)
             result_data = detect_satellites(model, x, device, return_spikes=need_spikes)
 
             if need_spikes:
@@ -1272,6 +1647,60 @@ def main():
                     output_path=f'tracking_sample_{i:03d}.gif',
                     fps=args.animation_fps,
                 )
+
+            if args.trajectory_video and i < 10:  # HONEST trajectory video
+                # Load trajectory if not already loaded
+                if trajectory is None:
+                    try:
+                        import scipy.io as sio
+                        rec = dataset.recordings[i]
+                        mat = sio.loadmat(rec['event_path'], squeeze_me=True)
+                        if 'Obj' in mat:
+                            obj = mat['Obj']
+                            if hasattr(obj, 'dtype') and obj.dtype.names:
+                                trajectory = {
+                                    'x': obj['x'] if 'x' in obj.dtype.names else None,
+                                    'y': obj['y'] if 'y' in obj.dtype.names else None,
+                                    't': obj['ts'] if 'ts' in obj.dtype.names else None
+                                }
+                    except Exception as e:
+                        print(f"Warning: Could not load trajectory: {e}")
+
+                print(f"\nSample {i}: Generating HONEST trajectory video...")
+                create_trajectory_video(
+                    x, raw_spikes,
+                    trajectory=trajectory,
+                    label=label,
+                    output_path=f'trajectory_sample_{i:03d}.gif',
+                    fps=args.animation_fps,
+                )
+
+            if args.hulk_tracking and i < 10:  # HULK/SMASH instance segmentation
+                print(f"\nSample {i}: Running HULK/SMASH tracking...")
+                hulk_result = run_hulk_smash_tracking(model, x, device)
+
+                print(f"  Classification spikes: {hulk_result['n_spikes']}")
+                print(f"  Instances found: {len(hulk_result['instances'])}")
+                print(f"  Objects after grouping: {len(hulk_result['objects'])}")
+
+                if hulk_result['objects']:
+                    for obj in hulk_result['objects']:
+                        print(f"    Object {obj.object_id}: {obj.n_instances} instances, bbox={obj.combined_bbox}")
+
+                # Add to results
+                result['hulk'] = {
+                    'n_spikes': hulk_result['n_spikes'],
+                    'n_instances': len(hulk_result['instances']),
+                    'n_objects': len(hulk_result['objects']),
+                    'objects': [
+                        {
+                            'id': obj.object_id,
+                            'n_instances': obj.n_instances,
+                            'bbox': obj.combined_bbox.to_xyxy() if obj.combined_bbox else None
+                        }
+                        for obj in hulk_result['objects']
+                    ]
+                }
 
             if (i + 1) % 10 == 0:
                 print(f"Processed {i + 1}/{len(dataset)}")
