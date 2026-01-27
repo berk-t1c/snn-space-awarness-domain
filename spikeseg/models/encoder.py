@@ -55,6 +55,7 @@ import torch.nn.functional as F
 
 from ..core.neurons import LIFNeuron, IFNeuron, create_neuron
 from ..core.layers import SpikingConv2d, SpikingPool2d
+from ..data.events import intensity_to_latency
 
 
 # =============================================================================
@@ -840,13 +841,24 @@ class SpikeSEGEncoder(nn.Module):
             # Single frame - process once or n_timesteps times
             if n_timesteps is None:
                 n_timesteps = 1
-            
-            # Replicate for each timestep (constant input)
-            x = x.unsqueeze(0).expand(n_timesteps, -1, -1, -1, -1)
-        
+
+            if not fire_once and n_timesteps > 1:
+                # BUG FIX: With fire_once=False, replicating constant input causes
+                # the same neurons to fire at EVERY timestep (no temporal variation).
+                # Instead, apply latency encoding to create time-varying spike train
+                # where each pixel fires at a specific timestep based on intensity.
+                #
+                # This converts static image to proper SNN input with temporal dynamics.
+                x = intensity_to_latency(x, n_timesteps=n_timesteps, to_spike=True)
+                # Result shape: (T, B, C, H, W)
+            else:
+                # fire_once=True: Neurons fire at most once, so constant input is OK.
+                # Replicate for each timestep (constant input)
+                x = x.unsqueeze(0).expand(n_timesteps, -1, -1, -1, -1)
+
         elif x.dim() == 5:
             n_timesteps = x.shape[0]
-        
+
         else:
             raise EncoderRuntimeError(
                 f"Input must be 4D (B, C, H, W) or 5D (T, B, C, H, W), "
