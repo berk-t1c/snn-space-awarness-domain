@@ -172,7 +172,7 @@ def load_model(checkpoint_path: str, device: torch.device, inference_threshold: 
     kernel_sizes = model_cfg.get('kernel_sizes', [5, 5, 7])
     conv1_channels = model_cfg.get('conv1_channels', 4)
     conv2_channels = model_cfg.get('conv2_channels', 36)
-    input_channels = config.get('data', {}).get('input_channels', 2)
+    input_channels = config.get('data', {}).get('input_channels', 1)  # Default 1 to match training
 
     # Use inference threshold (0.05 works best based on evaluation)
     thresholds = [inference_threshold] * 3
@@ -287,9 +287,11 @@ def detect_satellites(
             scale_y = input_h / class_h
             scale_x = input_w / class_w
 
-            # Offset to account for receptive field of convolutions
-            # Conv1(k=5) + Conv2(k=5) + Conv3(k=7) = total ~12 pixel offset
-            offset = 12
+            # Offset to account for receptive field of convolutions + pooling
+            # Conv1(k=5,pad=2) -> Pool1(2x2,s=2) -> Conv2(k=5,pad=2) -> Pool2(2x2,s=2) -> Conv3(k=7,pad=3)
+            # RF calculation: Conv1=5, after Pool1=10, Conv2=18, after Pool2=36, Conv3=60
+            # Center offset: Conv1=2, after Pool1=4, Conv2=8, after Pool2=16, Conv3=28
+            offset = 28
 
             # Find connected components
             binary_map = (spike_map > 0).astype(np.uint8)
@@ -1772,7 +1774,7 @@ def main():
         dataset = EBSSADataset(
             root=args.data_root,
             sensor='all',
-            n_timesteps=20,
+            n_timesteps=10,  # Match training default (was 20)
             height=128,
             width=128,
             normalize=True,

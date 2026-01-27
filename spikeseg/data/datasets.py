@@ -1478,8 +1478,8 @@ class EBSSADataset(EventDataset):
             )
         
         # Shift timestamps to start at 0 for this window
-        # Convert window_start to int64 to preserve precision for microsecond timestamps
-        t_extracted = events.t[mask] - np.int64(window_start)
+        # Convert window_start to int64 with rounding to preserve precision for microsecond timestamps
+        t_extracted = events.t[mask] - np.int64(np.round(window_start))
         
         return EventData(
             x=events.x[mask].copy(),
