@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900">
+  <defs>
+    <style>
+      .title { font: bold 32px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .subtitle { font: 24px 'Segoe UI', sans-serif; fill: #4fd1c5; }
+      .small-title { font: 14px 'Segoe UI', sans-serif; fill: #8899a6; }
+      .box-title { font: bold 18px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .box-subtitle { font: 14px 'Segoe UI', sans-serif; fill: #a0aec0; }
+      .legend-text { font: 14px 'Segoe UI', sans-serif; fill: #a0aec0; }
+      .annotation { font: italic 13px 'Segoe UI', sans-serif; fill: #a0aec0; }
+      .training-label { font: bold 12px 'Segoe UI', sans-serif; fill: #f6ad55; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="900" fill="#1a202c"/>
+
+  <!-- Title -->
+  <text x="60" y="50" class="small-title">Type 1 Compute</text>
+  <text x="60" y="90" class="title">Architecture Overview</text>
+  <text x="60" y="125" class="subtitle">Event-Based Instance Segmentation Pipeline</text>
+
+  <!-- Event Stream Box -->
+  <rect x="60" y="180" width="140" height="60" rx="6" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="130" y="215" text-anchor="middle" class="box-title">Event Stream</text>
+
+  <!-- Arrow to Encoder -->
+  <line x1="200" y1="210" x2="250" y2="210" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- ENCODER GROUP with STDP -->
+  <rect x="260" y="155" width="380" height="115" rx="8" fill="none" stroke="#f6ad55" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="270" y="175" class="training-label">TRAINING: STDP + WTA (Unsupervised)</text>
+
+  <!-- Encoder Box -->
+  <rect x="280" y="185" width="160" height="70" rx="6" fill="#2c7a7b"/>
+  <text x="360" y="218" text-anchor="middle" class="box-title">Encoder</text>
+  <text x="360" y="240" text-anchor="middle" class="box-subtitle">Feature Extraction</text>
+
+  <!-- Arrow Encoder to Classification -->
+  <line x1="440" y1="220" x2="480" y2="220" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Classification Spikes Box -->
+  <rect x="490" y="185" width="140" height="70" rx="6" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="560" y="218" text-anchor="middle" class="box-title">Classification</text>
+  <text x="560" y="238" text-anchor="middle" class="box-title">Spikes</text>
+  <text x="560" y="255" text-anchor="middle" class="box-subtitle">Temporal Features</text>
+
+  <!-- Branch point -->
+  <circle cx="560" cy="290" r="5" fill="#4fd1c5"/>
+  <line x1="560" y1="255" x2="560" y2="290" stroke="#4a5568" stroke-width="2"/>
+
+  <!-- Left branch annotation -->
+  <text x="320" y="310" class="annotation">(all spikes together)</text>
+
+  <!-- Right branch annotation -->
+  <text x="720" y="310" class="annotation">(each spike separately)</text>
+
+  <!-- Left arrow down to Decoder -->
+  <path d="M 560 290 L 360 290 L 360 340" stroke="#4a5568" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- Right arrow down to HULK -->
+  <path d="M 560 290 L 800 290 L 800 340" stroke="#4a5568" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- Decoder Box -->
+  <rect x="280" y="350" width="160" height="70" rx="6" fill="#2c7a7b"/>
+  <text x="360" y="383" text-anchor="middle" class="box-title">Decoder</text>
+  <text x="360" y="405" text-anchor="middle" class="box-subtitle">Spike Reconstruction</text>
+
+  <!-- Arrow Decoder to Saliency -->
+  <line x1="360" y1="420" x2="360" y2="470" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Saliency Map Box -->
+  <rect x="260" y="480" width="200" height="80" rx="6" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="360" y="515" text-anchor="middle" class="box-title">Saliency Map</text>
+  <rect x="290" y="535" width="140" height="20" rx="4" fill="#ecc94b"/>
+  <text x="360" y="550" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a202c">Semantic Segmentation</text>
+
+  <!-- HULK Box -->
+  <rect x="720" y="350" width="160" height="70" rx="6" fill="#2c7a7b"/>
+  <text x="800" y="383" text-anchor="middle" class="box-title">HULK</text>
+  <text x="800" y="405" text-anchor="middle" class="box-subtitle">Per-Instance Processing</text>
+
+  <!-- Arrow HULK to Masks -->
+  <line x1="800" y1="420" x2="800" y2="470" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Per-Instance Masks Box -->
+  <rect x="700" y="480" width="200" height="70" rx="6" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="800" y="510" text-anchor="middle" class="box-title">Per-Instance Masks + ASH</text>
+  <text x="800" y="532" text-anchor="middle" class="box-subtitle">Instance Features</text>
+
+  <!-- Arrow Masks to SMASH -->
+  <line x1="800" y1="550" x2="800" y2="590" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- SMASH Box -->
+  <rect x="720" y="600" width="160" height="70" rx="6" fill="#2c7a7b"/>
+  <text x="800" y="633" text-anchor="middle" class="box-title">SMASH</text>
+  <text x="800" y="655" text-anchor="middle" class="box-subtitle">Similarity Grouping</text>
+
+  <!-- Arrow SMASH to Instance Segmentation -->
+  <line x1="800" y1="670" x2="800" y2="720" stroke="#4a5568" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Instance Segmentation Output -->
+  <rect x="650" y="730" width="300" height="50" rx="6" fill="#ecc94b"/>
+  <text x="800" y="762" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a202c">Instance Segmentation</text>
+
+  <!-- LEGEND -->
+  <rect x="60" y="680" width="200" height="160" rx="6" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="80" y="710" class="legend-text" font-weight="bold">LEGEND</text>
+
+  <!-- Processing Module -->
+  <rect x="80" y="725" width="30" height="20" rx="4" fill="#2c7a7b"/>
+  <text x="120" y="740" class="legend-text">Processing Module</text>
+
+  <!-- Data Flow -->
+  <rect x="80" y="755" width="30" height="20" rx="4" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="120" y="770" class="legend-text">Data Flow</text>
+
+  <!-- Final Output -->
+  <rect x="80" y="785" width="30" height="20" rx="4" fill="#ecc94b"/>
+  <text x="120" y="800" class="legend-text">Final Output</text>
+
+  <!-- Training Phase -->
+  <rect x="80" y="815" width="30" height="20" rx="4" fill="none" stroke="#f6ad55" stroke-width="2" stroke-dasharray="4,2"/>
+  <text x="120" y="830" class="legend-text">Training (STDP)</text>
+
+  <!-- STDP Detail Box -->
+  <rect x="920" y="180" width="240" height="200" rx="8" fill="#2d3748" stroke="#4a5568" stroke-width="1"/>
+  <text x="1040" y="210" text-anchor="middle" class="box-title" fill="#f6ad55">STDP Learning</text>
+  <text x="940" y="240" class="box-subtitle">• Pre fires BEFORE post</text>
+  <text x="940" y="260" class="box-subtitle">  → Strengthen (LTP)</text>
+  <text x="940" y="290" class="box-subtitle">• Pre fires AFTER post</text>
+  <text x="940" y="310" class="box-subtitle">  → Weaken (LTD)</text>
+  <text x="940" y="350" class="box-subtitle">• No labels required</text>
+  <text x="940" y="370" class="box-subtitle">• Layer-by-layer training</text>
+
+  <!-- Arrowhead marker -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4a5568"/>
+    </marker>
+  </defs>
+</svg>
