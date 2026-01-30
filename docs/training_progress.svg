@@ -1,0 +1,213 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .title { font: bold 24px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .subtitle { font: 16px 'Segoe UI', sans-serif; fill: #a0aec0; }
+      .axis-label { font: 14px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .tick-label { font: 12px 'Segoe UI', sans-serif; fill: #a0aec0; }
+      .legend-text { font: 12px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .annotation { font: 11px 'Segoe UI', sans-serif; fill: #ffffff; }
+      .summary { font: 11px 'Consolas', monospace; fill: #ffffff; }
+    </style>
+    <linearGradient id="conv2Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4fd1c5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2c7a7b;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="conv3Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f6ad55;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c05621;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="700" fill="#1a202c"/>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" class="title">SpikeSEG STDP Training Progress</text>
+
+  <!-- ============================================================ -->
+  <!-- PLOT 1: Convergence (top) -->
+  <!-- ============================================================ -->
+
+  <!-- Plot area background -->
+  <rect x="80" y="70" width="780" height="250" fill="#2d3748" rx="4"/>
+
+  <!-- Subtitle -->
+  <text x="470" y="95" text-anchor="middle" class="subtitle">Weight Convergence (C_l &lt; 0.01)</text>
+
+  <!-- Y-axis labels -->
+  <text x="70" y="175" text-anchor="end" class="tick-label">100%</text>
+  <text x="70" y="220" text-anchor="end" class="tick-label">75%</text>
+  <text x="70" y="265" text-anchor="end" class="tick-label">50%</text>
+  <text x="70" y="310" text-anchor="end" class="tick-label">25%</text>
+  <text x="45" y="240" text-anchor="middle" class="axis-label" transform="rotate(-90, 45, 240)">Convergence (%)</text>
+
+  <!-- Grid lines -->
+  <line x1="80" y1="170" x2="860" y2="170" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="215" x2="860" y2="215" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="260" x2="860" y2="260" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="305" x2="860" y2="305" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+
+  <!-- 90% threshold line -->
+  <line x1="80" y1="179" x2="860" y2="179" stroke="#ecc94b" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="865" y="183" class="tick-label" fill="#ecc94b">90% target</text>
+
+  <!-- X-axis for epochs (1-21) -->
+  <text x="115" y="330" text-anchor="middle" class="tick-label">1</text>
+  <text x="152" y="330" text-anchor="middle" class="tick-label">2</text>
+  <text x="189" y="330" text-anchor="middle" class="tick-label">3</text>
+  <text x="226" y="330" text-anchor="middle" class="tick-label">4</text>
+  <text x="263" y="330" text-anchor="middle" class="tick-label">5</text>
+  <text x="337" y="330" text-anchor="middle" class="tick-label">8</text>
+  <text x="448" y="330" text-anchor="middle" class="tick-label">12</text>
+  <text x="559" y="330" text-anchor="middle" class="tick-label">16</text>
+  <text x="670" y="330" text-anchor="middle" class="tick-label">20</text>
+  <text x="707" y="330" text-anchor="middle" class="tick-label">21</text>
+
+  <!-- Conv2 convergence line (epochs 1-20) -->
+  <!-- Data points: 2.8, 19.4, 38.9, 72.2, 72.2, 72.2, 75.0, 75.0, 75.0, 77.8, 80.6, 80.6, 80.6, 80.6, 83.3, 83.3, 83.3, 86.1, 86.1, 91.7 -->
+  <!-- Y scale: 0% = 305, 100% = 125, so y = 305 - (value/100)*180 -->
+  <polyline
+    points="115,300 152,270 189,235 226,175 263,175 300,175 337,170 374,170 411,170 448,165 485,160 522,160 559,160 596,160 633,155 670,155 707,155 744,150 781,150 818,140"
+    fill="none" stroke="#4fd1c5" stroke-width="3"/>
+
+  <!-- Conv2 data points -->
+  <circle cx="115" cy="300" r="5" fill="#4fd1c5"/>
+  <circle cx="152" cy="270" r="5" fill="#4fd1c5"/>
+  <circle cx="189" cy="235" r="5" fill="#4fd1c5"/>
+  <circle cx="226" cy="175" r="5" fill="#4fd1c5"/>
+  <circle cx="263" cy="175" r="5" fill="#4fd1c5"/>
+  <circle cx="300" cy="175" r="5" fill="#4fd1c5"/>
+  <circle cx="337" cy="170" r="5" fill="#4fd1c5"/>
+  <circle cx="374" cy="170" r="5" fill="#4fd1c5"/>
+  <circle cx="411" cy="170" r="5" fill="#4fd1c5"/>
+  <circle cx="448" cy="165" r="5" fill="#4fd1c5"/>
+  <circle cx="485" cy="160" r="5" fill="#4fd1c5"/>
+  <circle cx="522" cy="160" r="5" fill="#4fd1c5"/>
+  <circle cx="559" cy="160" r="5" fill="#4fd1c5"/>
+  <circle cx="596" cy="160" r="5" fill="#4fd1c5"/>
+  <circle cx="633" cy="155" r="5" fill="#4fd1c5"/>
+  <circle cx="670" cy="155" r="5" fill="#4fd1c5"/>
+  <circle cx="707" cy="155" r="5" fill="#4fd1c5"/>
+  <circle cx="744" cy="150" r="5" fill="#4fd1c5"/>
+  <circle cx="781" cy="150" r="5" fill="#4fd1c5"/>
+  <circle cx="818" cy="140" r="6" fill="#4fd1c5" stroke="#fff" stroke-width="2"/>
+
+  <!-- Conv3 line (epoch 20-21: 91.7 to 100) -->
+  <line x1="818" y1="140" x2="855" y2="125" stroke="#f6ad55" stroke-width="3"/>
+  <circle cx="855" cy="125" r="6" fill="#f6ad55" stroke="#fff" stroke-width="2"/>
+
+  <!-- Layer transition line -->
+  <line x1="818" y1="110" x2="818" y2="315" stroke="#ffffff" stroke-width="1" stroke-dasharray="4,4" opacity="0.5"/>
+  <text x="825" y="280" class="annotation" opacity="0.7">Layer</text>
+  <text x="825" y="295" class="annotation" opacity="0.7">Switch</text>
+
+  <!-- Annotations -->
+  <text x="780" y="130" class="annotation" fill="#4fd1c5">Conv2: 91.7%</text>
+  <text x="855" y="115" class="annotation" fill="#f6ad55">100%</text>
+
+  <!-- Legend for plot 1 -->
+  <rect x="100" y="105" width="15" height="15" fill="#4fd1c5" rx="2"/>
+  <text x="120" y="117" class="legend-text">Conv2 (36 features)</text>
+  <rect x="240" y="105" width="15" height="15" fill="#f6ad55" rx="2"/>
+  <text x="260" y="117" class="legend-text">Conv3 (1 feature)</text>
+  <line x1="380" y1="112" x2="410" y2="112" stroke="#ecc94b" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="415" y="117" class="legend-text">Target (90%)</text>
+
+  <!-- ============================================================ -->
+  <!-- PLOT 2: Spikes (bottom) -->
+  <!-- ============================================================ -->
+
+  <!-- Plot area background -->
+  <rect x="80" y="360" width="780" height="250" fill="#2d3748" rx="4"/>
+
+  <!-- Subtitle -->
+  <text x="470" y="385" text-anchor="middle" class="subtitle">Spike Activity per Epoch</text>
+
+  <!-- Y-axis labels -->
+  <text x="70" y="420" text-anchor="end" class="tick-label">80k</text>
+  <text x="70" y="470" text-anchor="end" class="tick-label">60k</text>
+  <text x="70" y="520" text-anchor="end" class="tick-label">40k</text>
+  <text x="70" y="570" text-anchor="end" class="tick-label">20k</text>
+  <text x="70" y="600" text-anchor="end" class="tick-label">0</text>
+  <text x="45" y="510" text-anchor="middle" class="axis-label" transform="rotate(-90, 45, 510)">Spikes (thousands)</text>
+
+  <!-- Grid lines -->
+  <line x1="80" y1="420" x2="860" y2="420" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="470" x2="860" y2="470" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="520" x2="860" y2="520" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="80" y1="570" x2="860" y2="570" stroke="#4a5568" stroke-width="1" stroke-dasharray="4,4"/>
+
+  <!-- X-axis labels -->
+  <text x="470" y="620" text-anchor="middle" class="axis-label">Epoch</text>
+
+  <!-- Spike bars (Conv2) - scale: 0=600, 82k=400, so height = spikes/82000 * 200 -->
+  <!-- Epoch 1: 82165 spikes -->
+  <rect x="105" y="400" width="20" height="200" fill="url(#conv2Gradient)" rx="2"/>
+  <!-- Epoch 2: 24349 spikes (height ~59) -->
+  <rect x="142" y="541" width="20" height="59" fill="url(#conv2Gradient)" rx="2"/>
+  <!-- Epoch 3: 20738 (h~51) -->
+  <rect x="179" y="549" width="20" height="51" fill="url(#conv2Gradient)" rx="2"/>
+  <!-- Epochs 4-20: ~20k each (h~49) -->
+  <rect x="216" y="548" width="20" height="52" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="253" y="551" width="20" height="49" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="290" y="550" width="20" height="50" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="327" y="552" width="20" height="48" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="364" y="550" width="20" height="50" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="401" y="549" width="20" height="51" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="438" y="551" width="20" height="49" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="475" y="552" width="20" height="48" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="512" y="552" width="20" height="48" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="549" y="553" width="20" height="47" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="586" y="552" width="20" height="48" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="623" y="553" width="20" height="47" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="660" y="554" width="20" height="46" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="697" y="555" width="20" height="45" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="734" y="558" width="20" height="42" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="771" y="556" width="20" height="44" fill="url(#conv2Gradient)" rx="2"/>
+  <rect x="808" y="559" width="20" height="41" fill="url(#conv2Gradient)" rx="2"/>
+
+  <!-- Conv3 spike bar (epoch 21: 1252 spikes, very small) -->
+  <rect x="845" y="597" width="20" height="3" fill="url(#conv3Gradient)" rx="1"/>
+
+  <!-- Annotations for spikes plot -->
+  <line x1="125" y1="395" x2="180" y2="430" stroke="#ffffff" stroke-width="1"/>
+  <text x="185" y="435" class="annotation">Initial spike</text>
+  <text x="185" y="450" class="annotation">explosion (82k)</text>
+
+  <line x1="550" y1="545" x2="580" y2="490" stroke="#ffffff" stroke-width="1"/>
+  <text x="530" y="485" class="annotation">Stabilized ~20k</text>
+
+  <!-- Layer transition line -->
+  <line x1="818" y1="395" x2="818" y2="605" stroke="#ffffff" stroke-width="1" stroke-dasharray="4,4" opacity="0.5"/>
+
+  <!-- Legend for plot 2 -->
+  <rect x="100" y="395" width="15" height="15" fill="url(#conv2Gradient)" rx="2"/>
+  <text x="120" y="407" class="legend-text">Conv2</text>
+  <rect x="180" y="395" width="15" height="15" fill="url(#conv3Gradient)" rx="2"/>
+  <text x="200" y="407" class="legend-text">Conv3</text>
+
+  <!-- ============================================================ -->
+  <!-- Summary Box -->
+  <!-- ============================================================ -->
+  <rect x="80" y="630" width="300" height="60" fill="#2d3748" stroke="#4a5568" stroke-width="1" rx="4"/>
+  <text x="95" y="650" class="summary">Training Summary:</text>
+  <text x="95" y="665" class="summary">• Total: 3h 8m | Conv2: 20 epochs | Conv3: 1 epoch</text>
+  <text x="95" y="680" class="summary">• Hardware: NVIDIA H100 | Samples: 84</text>
+
+  <!-- Final convergence box -->
+  <rect x="420" y="630" width="440" height="60" fill="#2d3748" stroke="#4a5568" stroke-width="1" rx="4"/>
+  <text x="435" y="650" class="summary">Final Convergence:</text>
+  <rect x="435" y="658" width="80" height="20" fill="#4a5568" rx="3"/>
+  <text x="475" y="673" text-anchor="middle" class="legend-text">Conv1: 0%</text>
+  <text x="480" y="685" class="tick-label">(fixed DoG)</text>
+
+  <rect x="555" y="658" width="120" height="20" fill="#4fd1c5" rx="3"/>
+  <text x="615" y="673" text-anchor="middle" class="legend-text" fill="#1a202c">Conv2: 91.7%</text>
+  <text x="615" y="685" text-anchor="middle" class="tick-label">(33/36 features)</text>
+
+  <rect x="715" y="658" width="120" height="20" fill="#f6ad55" rx="3"/>
+  <text x="775" y="673" text-anchor="middle" class="legend-text" fill="#1a202c">Conv3: 100%</text>
+  <text x="775" y="685" text-anchor="middle" class="tick-label">(1/1 features)</text>
+
+</svg>
