@@ -24,7 +24,7 @@
   <rect width="1000" height="750" fill="#1a202c"/>
 
   <!-- Title -->
-  <text x="500" y="35" text-anchor="middle" class="title">SpikeSEG STDP Training Progress</text>
+  <text x="500" y="35" text-anchor="middle" class="title">SpikeSPACE STDP Training Progress</text>
 
   <!-- ============================================================ -->
   <!-- PLOT 1: Convergence (top) -->
