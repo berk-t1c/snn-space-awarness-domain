@@ -211,9 +211,9 @@
   <rect x="846" y="617" width="28" height="3" fill="url(#conv3Gradient)" rx="1"/>
 
   <!-- Annotations -->
-  <line x1="160" y1="430" x2="220" y2="460" stroke="#ffffff" stroke-width="1"/>
-  <text x="225" y="458" class="annotation">Initial spike</text>
-  <text x="225" y="472" class="annotation">explosion (82k)</text>
+  <line x1="174" y1="437" x2="240" y2="470" stroke="#ffffff" stroke-width="1"/>
+  <text x="245" y="468" class="annotation">Initial spike</text>
+  <text x="245" y="482" class="annotation">explosion (82k)</text>
 
   <line x1="580" y1="570" x2="620" y2="530" stroke="#ffffff" stroke-width="1"/>
   <text x="580" y="525" class="annotation">Stabilized ~20k</text>
