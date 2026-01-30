@@ -232,7 +232,7 @@
   <rect x="100" y="665" width="320" height="70" fill="#2d3748" stroke="#4a5568" stroke-width="1" rx="4"/>
   <text x="115" y="688" class="summary" font-weight="bold">Training Summary</text>
   <text x="115" y="705" class="summary">• Total time: 3h 8m (11,288 seconds)</text>
-  <text x="115" y="720" class="summary">• Hardware: NVIDIA H100 | Samples: 84</text>
+  <text x="115" y="720" class="summary">• Hardware: NVIDIA H100 | Samples: 48</text>
 
   <!-- Final Convergence -->
   <rect x="440" y="665" width="510" height="70" fill="#2d3748" stroke="#4a5568" stroke-width="1" rx="4"/>
